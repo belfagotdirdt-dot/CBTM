@@ -99,10 +99,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#005A9E"/>
+                                <Setter Property="Background" Value="Gray"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter Property="Background" Value="#003C7A"/>
+                                <Setter Property="Background" Value="DarkGray"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -123,8 +123,8 @@
         <!-- Панель с кнопками внизу -->
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" 
                     HorizontalAlignment="Right" Margin="0,10,0,0">
-            <Button Content="Сохранить" x:Name="SaveButton" Style="{StaticResource ActionButtonsStyle}"/>
-            <Button Content="Сбросить" x:Name="ResetButton" Style="{StaticResource ActionButtonsStyle}"/>
+            <Button Content="Сохранить" x:Name="SaveButton" Style="{StaticResource ActionButtonsStyle}" />
+            <Button Content="Сбросить" x:Name="ResetButton" Style="{StaticResource ActionButtonsStyle}" />
         </StackPanel>
 
         <!-- Основной прокручиваемый контент -->
@@ -138,7 +138,7 @@
                         <CheckBox Content="Инверсия по Y" x:Name="InvertYCheckbox"/>
                         <StackPanel Orientation="Horizontal" Margin="0,5,0,5">
                             <Label Content="Сенсорная чувствительность:" Width="196"/>
-                            <TextBox x:Name="SensitivityTextBox" Text="1.0" Width="45" TextAlignment="Center" />
+                            <TextBox x:Name="SensitivityTextBox" Text="1" Width="45" TextAlignment="Center"  PreviewTextInput="SensitivityTextBox_PreviewTextInput" />
                         </StackPanel>
                     </StackPanel>
                 </Expander>
@@ -165,7 +165,7 @@
                 <!-- Раздел 3: Клавиши -->
                 <Expander Header="Клавиши" IsExpanded="True">
                     <StackPanel>
-                        <Button Content="Изменить пароль" x:Name="ChangePasswordButton" HorizontalAlignment="Left" Style="{StaticResource DefaultButtonStyle}"/>
+                        <Button Content="Изменить пароль" x:Name="ChangePasswordButton" HorizontalAlignment="Left" Click="ChangePasswordButton_Click" Style="{StaticResource DefaultButtonStyle}" />
                         <Label Content="Настройка биндов клавиш:" Margin="0,15,0,5"/>
 
                         <StackPanel Orientation="Horizontal" Margin="0,5">
