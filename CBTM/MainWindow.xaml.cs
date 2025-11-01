@@ -39,9 +39,9 @@ namespace CBTM
         public string M7Value { get; set; } = "Volume Down";
         public string M8Value { get; set; } = "Mute";
         public string M9Value { get; set; } = "Task View";
-
         // --- Переменная для хранения текущего пароля ---
-        private string CurrentPassword = "M1M1M1M1M1M1"; // Пример: текущий пароль — 6 символов из кнопок
+        private string CurrentPassword = "1234"; // Установите ваш пароль по умолчанию
+        public int temp = 0;
 
         public MainWindow()
         {
@@ -49,7 +49,9 @@ namespace CBTM
             // Подписываем кнопку "Сбросить" на вызов функции Reset
             ResetButton.Click += (sender, e) => Reset();
             SaveButton.Click += (sender, e) => SaveSettings();
-           
+            ChangePasswordButton.Click += (sender, e) => OpenChangePasswordDialog();
+
+
         }
 
         public void Reset()
@@ -144,104 +146,338 @@ namespace CBTM
             //Debug.WriteLine("========================");
 
             // Пример: показываем сообщение
-           
+
         }
 
-
-        private void ChangePasswordButton_Click(object sender, RoutedEventArgs e)
+        private void OpenChangePasswordDialog()
         {
-            // Создаём окно с полями ввода
-            Window passwordWindow = new Window()
+            var dialog = new Window
             {
-                Title = "Изменить пароль",
-                Width = 350,
-                Height = 200,
+                Title = "Изменение пароля",
+                Width = 400,
+                Height = 300,
                 ResizeMode = ResizeMode.NoResize,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this
+                Owner = this,
+                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)), // Серый фон
+                Foreground = Brushes.White
             };
 
-            // Создаём StackPanel для размещения элементов
-            StackPanel panel = new StackPanel()
+            var grid = new Grid();
+            grid.Margin = new Thickness(20);
+
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Заголовок
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Старый пароль
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Новый пароль
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Кнопки
+
+            // --- Заголовок БЕЗ ИКОНКИ ---
+            var headerText = new TextBlock
             {
-                Margin = new Thickness(10)
+                Text = "Изменение пароля",
+                FontSize = 18,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = Brushes.White,
+                Margin = new Thickness(0, 0, 0, 20)
+            };
+            Grid.SetRow(headerText, 0);
+            grid.Children.Add(headerText);
+
+            // --- Поле "Старый пароль" с кнопкой показа ---
+            var oldPasswordLabel = new Label
+            {
+                Content = "Старый пароль",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 10, 0, 5),
+                Foreground = Brushes.White
+            };
+            var oldPasswordStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left };
+            var oldPasswordBox = new PasswordBox
+            {
+                Width = 250,
+                Margin = new Thickness(0, 0, 0, 0),
+                Background = Brushes.White,
+                Foreground = Brushes.Black,
+                PasswordChar = '*'
+            };
+            var oldPasswordTextBox = new TextBox // Новое поле для показа текста
+            {
+                Width = 250,
+                Margin = new Thickness(0, 0, 0, 0),
+                Background = Brushes.White,
+                Foreground = Brushes.Black,
+                Text = "",
+                Visibility = Visibility.Collapsed // Скрыто по умолчанию
+            };
+            var showOldButton = new Button
+            {
+                Content = "👁️",
+                Width = 30,
+                Height = 25,
+                Background = Brushes.Transparent,
+                Foreground = Brushes.White,
+                BorderBrush = Brushes.Gray,
+                Cursor = Cursors.Hand,
+                Padding = new Thickness(0)
+            };
+            // Стиль кнопки: синий при наведении
+            showOldButton.MouseEnter += (s, e) => showOldButton.Background = new SolidColorBrush(Color.FromRgb(0, 120, 212));
+            showOldButton.MouseLeave += (s, e) => showOldButton.Background = Brushes.Transparent;
+
+            // При нажатии — показываем текст в новом поле
+            showOldButton.PreviewMouseDown += (s, e) =>
+            {
+                oldPasswordTextBox.Text = oldPasswordBox.Password;
+                oldPasswordBox.Visibility = Visibility.Collapsed;
+                oldPasswordTextBox.Visibility = Visibility.Visible;
+            };
+            // При отпускании — скрываем новое поле и возвращаем маскировку
+            showOldButton.PreviewMouseUp += (s, e) =>
+            {
+                oldPasswordTextBox.Visibility = Visibility.Collapsed;
+                oldPasswordBox.Visibility = Visibility.Visible;
+            };
+            // Если курсор ушёл, а кнопка всё ещё нажата — скрываем
+            showOldButton.LostMouseCapture += (s, e) =>
+            {
+                oldPasswordTextBox.Visibility = Visibility.Collapsed;
+                oldPasswordBox.Visibility = Visibility.Visible;
             };
 
-            // Создаём текстовые блоки и поля ввода
-            Label labelOldPassword = new Label() { Content = "Введите старый пароль:" };
-            PasswordBox inputOldPassword = new PasswordBox() { Margin = new Thickness(0, 0, 0, 10) };
+            oldPasswordStack.Children.Add(oldPasswordBox);
+            oldPasswordStack.Children.Add(oldPasswordTextBox);
+            oldPasswordStack.Children.Add(showOldButton);
+            var oldPasswordContainer = new StackPanel();
+            oldPasswordContainer.Children.Add(oldPasswordLabel);
+            oldPasswordContainer.Children.Add(oldPasswordStack);
+            Grid.SetRow(oldPasswordContainer, 1);
+            grid.Children.Add(oldPasswordContainer);
 
-            Label labelOldPasswordConfirm = new Label() { Content = "Повторите старый пароль:" };
-            PasswordBox inputOldPasswordConfirm = new PasswordBox() { Margin = new Thickness(0, 0, 0, 10) };
-
-            Label labelNewPassword = new Label() { Content = "Введите новый пароль:" };
-            PasswordBox inputNewPassword = new PasswordBox() { Margin = new Thickness(0, 0, 0, 10) };
-
-            // Кнопка подтверждения
-            Button submitButton = new Button()
+            // --- Поле "Новый пароль" с кнопкой показа ---
+            var newPasswordLabel = new Label
             {
-                Content = "Сменить пароль",
+                Content = "Новый пароль",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 10, 0, 5),
+                Foreground = Brushes.White
+            };
+            var newPasswordStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left };
+            var newPasswordBox = new PasswordBox
+            {
+                Width = 250,
+                Margin = new Thickness(0, 0, 0, 0),
+                Background = Brushes.White,
+                Foreground = Brushes.Black,
+                PasswordChar = '*'
+            };
+            var newPasswordTextBox = new TextBox // Новое поле для показа текста
+            {
+                Width = 250,
+                Margin = new Thickness(0, 0, 0, 0),
+                Background = Brushes.White,
+                Foreground = Brushes.Black,
+                Text = "",
+                Visibility = Visibility.Collapsed // Скрыто по умолчанию
+            };
+            var showNewButton = new Button
+            {
+                Content = "👁️",
+                Width = 30,
+                Height = 25,
+                Background = Brushes.Transparent,
+                Foreground = Brushes.White,
+                BorderBrush = Brushes.Gray,
+                Cursor = Cursors.Hand,
+                Padding = new Thickness(0)
+            };
+            // Стиль кнопки: синий при наведении
+            showNewButton.MouseEnter += (s, e) => showNewButton.Background = new SolidColorBrush(Color.FromRgb(0, 120, 212));
+            showNewButton.MouseLeave += (s, e) => showNewButton.Background = Brushes.Transparent;
+
+            // При нажатии — показываем текст в новом поле
+            showNewButton.PreviewMouseDown += (s, e) =>
+            {
+                newPasswordTextBox.Text = newPasswordBox.Password;
+                newPasswordBox.Visibility = Visibility.Collapsed;
+                newPasswordTextBox.Visibility = Visibility.Visible;
+            };
+            // При отпускании — скрываем новое поле и возвращаем маскировку
+            showNewButton.PreviewMouseUp += (s, e) =>
+            {
+                newPasswordTextBox.Visibility = Visibility.Collapsed;
+                newPasswordBox.Visibility = Visibility.Visible;
+            };
+            // Если курсор ушёл, а кнопка всё ещё нажата — скрываем
+            showNewButton.LostMouseCapture += (s, e) =>
+            {
+                newPasswordTextBox.Visibility = Visibility.Collapsed;
+                newPasswordBox.Visibility = Visibility.Visible;
+            };
+
+            newPasswordStack.Children.Add(newPasswordBox);
+            newPasswordStack.Children.Add(newPasswordTextBox);
+            newPasswordStack.Children.Add(showNewButton);
+            var newPasswordContainer = new StackPanel();
+            newPasswordContainer.Children.Add(newPasswordLabel);
+            newPasswordContainer.Children.Add(newPasswordStack);
+            Grid.SetRow(newPasswordContainer, 2);
+            grid.Children.Add(newPasswordContainer);
+
+            // --- Кнопки "Далее" и "Отмена" ---
+            var buttonStack = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
                 Margin = new Thickness(0, 10, 0, 0)
             };
 
-            // Добавляем элементы в панель
-            panel.Children.Add(labelOldPassword);
-            panel.Children.Add(inputOldPassword);
-            panel.Children.Add(labelOldPasswordConfirm);
-            panel.Children.Add(inputOldPasswordConfirm);
-            panel.Children.Add(labelNewPassword);
-            panel.Children.Add(inputNewPassword);
-            panel.Children.Add(submitButton);
+            // Стиль для всех кнопок
+            Style buttonStyle = new Style(typeof(Button));
+            buttonStyle.Setters.Add(new Setter(Button.BackgroundProperty, Brushes.White));
+            buttonStyle.Setters.Add(new Setter(Button.ForegroundProperty, Brushes.Black));
+            buttonStyle.Setters.Add(new Setter(Button.BorderBrushProperty, Brushes.Gray));
+            buttonStyle.Setters.Add(new Setter(Button.CursorProperty, Cursors.Hand));
+            buttonStyle.Setters.Add(new Setter(Button.PaddingProperty, new Thickness(12, 6, 12, 6)));
+            buttonStyle.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 30.0)); // ✅ Правильно
+            buttonStyle.Setters.Add(new Setter(FrameworkElement.MinWidthProperty, 80.0));  // ✅ Правильно
 
-            // Обработчик нажатия кнопки
-            submitButton.Click += (s, args) =>
+            // Триггер: при наведении — синий фон
+            buttonStyle.Triggers.Add(new Trigger
             {
-                string oldPass = inputOldPassword.Password;
-                string oldPassConfirm = inputOldPasswordConfirm.Password;
-                string newPass = inputNewPassword.Password;
+                Property = Button.IsMouseOverProperty,
+                Value = true,
+                Setters =
+        {
+            new Setter(Button.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0, 120, 212))),
+            new Setter(Button.ForegroundProperty, Brushes.White)
+        }
+            });
 
-                // Проверка: 6 значений, только кнопки мыши
-                if (!IsValidPassword(oldPass) || !IsValidPassword(oldPassConfirm) || !IsValidPassword(newPass))
+            var nextButton = new Button { Content = "Далее", Style = buttonStyle };
+            var cancelButton = new Button { Content = "Отмена", Style = buttonStyle };
+
+            buttonStack.Children.Add(nextButton);
+            buttonStack.Children.Add(cancelButton);
+            Grid.SetRow(buttonStack, 3);
+            grid.Children.Add(buttonStack);
+
+            // --- Обработчик кнопки "Далее" ---
+            nextButton.Click += (s, e) =>
+            {
+                //// Всегда показываем введённые пароли
+                //MessageBox.Show($"Старый пароль: {oldPasswordBox.Password}\nНовый пароль: {newPasswordBox.Password}",
+                //                "Введённые данные", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                // Проверяем, совпадает ли старый пароль
+                if (oldPasswordBox.Password == CurrentPassword)
                 {
-                    MessageBox.Show("Пароль должен состоять из 6 значений (например: M1M2M3).", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
+                    if (!string.IsNullOrEmpty(newPasswordBox.Password))
+                    {
+                        CurrentPassword = newPasswordBox.Password;
+                        MessageBox.Show("Пароль успешно изменён!", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
+                        dialog.Close();
+                    }
+                    else
+                    {
+                        MessageBox.Show("Новый пароль не может быть пустым.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
                 }
-
-                if (oldPass != CurrentPassword)
+                else
                 {
-                    MessageBox.Show("Старый пароль неверен.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
+                    temp++;
 
-                if (oldPass != oldPassConfirm)
-                {
-                    MessageBox.Show("Повтор старого пароля не совпадает.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
+                    MessageBox.Show("Пароль успешно не изменён!", $"Количество попыток {3 - temp}", MessageBoxButton.OK, MessageBoxImage.Information);
 
-                CurrentPassword = newPass;
-                MessageBox.Show("Пароль успешно изменён!", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
-                passwordWindow.Close();
+                    if (temp == 3)
+                    {
+
+                        ShowLockoutDialog();
+                        
+                        temp = 0;   
+                    }
+
+
+                    dialog.Close();
+                }
             };
 
-            passwordWindow.Content = panel;
-            passwordWindow.ShowDialog();
+            // --- Обработчик кнопки "Отмена" ---
+            cancelButton.Click += (s, e) => dialog.Close();
+
+            dialog.Content = grid;
+            dialog.ShowDialog();
         }
 
-        /// <summary>
-        /// Проверяет, является ли строка допустимым паролем (6 значений, только кнопки мыши).
-        /// Пример: M1M2M3, LRM1M2, M3M4M5 и т.д.
-        /// </summary>
-        private bool IsValidPassword(string password)
+        public void ShowLockoutDialog()
         {
-            if (password.Length != 6)
-                return false;
+            var lockoutDialog = new Window
+            {
+                Title = "Приложение заблокировано",
+                Width = 350,
+                Height = 150,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
+                Foreground = Brushes.White
+            };
 
-            // Регулярное выражение для проверки: M1-M9, L, R, M
-            Regex regex = new Regex(@"^(M[1-9]|[LRM]){6}$", RegexOptions.IgnoreCase);
-            return regex.IsMatch(password);
+            var textBlock = new TextBlock
+            {
+                Text = "Приложение заблокировано на 1 минуту.",
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 16,
+                Margin = new Thickness(10)
+            };
+
+            var countdownText = new TextBlock
+            {
+                Text = "60",
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 16,
+                Margin = new Thickness(10, 40, 10, 10)
+            };
+
+            var stack = new StackPanel();
+            stack.Children.Add(textBlock);
+            stack.Children.Add(countdownText);
+
+            lockoutDialog.Content = stack;
+
+            // Таймер обратного отсчёта
+            var startTime = DateTime.Now;
+            var timer = new System.Windows.Threading.DispatcherTimer();
+            timer.Interval = TimeSpan.FromSeconds(1);
+            timer.Tick += (s, e) =>
+            {
+                var elapsed = (DateTime.Now - startTime).TotalSeconds;
+                var remaining = Math.Max(0, 60 - (int)elapsed);
+                countdownText.Text = remaining.ToString();
+
+                if (remaining <= 0)
+                {
+                    timer.Stop();
+                    lockoutDialog.Close();
+                }
+            };
+            timer.Start();
+
+            // Запрещаем закрытие окна вручную
+            lockoutDialog.Closing += (s, e) =>
+            {
+                if ((DateTime.Now - startTime).TotalSeconds < 60)
+                {
+                    e.Cancel = true; // Отменяем закрытие
+                }
+            };
+
+            lockoutDialog.ShowDialog();
         }
 
+       
 
     }
 }

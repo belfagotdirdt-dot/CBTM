@@ -165,7 +165,7 @@
                 <!-- Раздел 3: Клавиши -->
                 <Expander Header="Клавиши" IsExpanded="True">
                     <StackPanel>
-                        <Button Content="Изменить пароль" x:Name="ChangePasswordButton" HorizontalAlignment="Left" Click="ChangePasswordButton_Click" Style="{StaticResource DefaultButtonStyle}" />
+                        <Button Content="Изменить пароль" x:Name="ChangePasswordButton" HorizontalAlignment="Left" Style="{StaticResource DefaultButtonStyle}" />
                         <Label Content="Настройка биндов клавиш:" Margin="0,15,0,5"/>
 
                         <StackPanel Orientation="Horizontal" Margin="0,5">
