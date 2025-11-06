@@ -27,7 +27,7 @@ namespace CBTM
         public double Brightness { get; set; } = 50;
         public bool IsGradient { get; set; } = true;
         public bool IsMonoColor { get; set; } = false;
-        public string ColorValue { get; set; } = "RGB";
+        public string ColorValue { get; set; } = "000.000.000";
         public double GradientSpeed { get; set; } = 50;
 
         public string M1Value { get; set; } = "left click";
@@ -50,7 +50,8 @@ namespace CBTM
             ResetButton.Click += (sender, e) => Reset();
             SaveButton.Click += (sender, e) => SaveSettings();
             ChangePasswordButton.Click += (sender, e) => OpenChangePasswordDialog();
-
+            ColorInputBox.PreviewKeyDown += PreviewKeyDown;
+            SensitivityTextBox.PreviewKeyDown += PreviewKeyDown;
 
         }
 
@@ -65,7 +66,7 @@ namespace CBTM
             BrightnessSlider.Value = 50;
             Gradient.IsChecked = true;  // Устанавливаем "Градиент" как активный
             MonoColor.IsChecked = false; // "Моноцвет" неактивен
-            ColorInputBox.Text = "RGB"; // Базовое значение
+            ColorInputBox.Text = "000.000.000"; // Базовое значение
             SpeedG.Value = 50;
 
             // --- Клавиши ---
@@ -99,6 +100,39 @@ namespace CBTM
             }
         }
 
+        public void ColorInputBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        {
+            TextBox textBox = (TextBox)sender;
+
+
+            // Проверяем, не превышает ли текущий текст + новый символ лимит в 11
+            if (textBox.Text.Length >= 11)
+            {
+                e.Handled = true; // Отменяем ввод, если уже 11 символов
+                return;
+            }
+
+            // Проверяем, является ли вводимый символ цифрой, точкой или запятой
+            char inputChar = e.Text[e.Text.Length - 1];
+            if (!char.IsDigit(inputChar) && inputChar != '.' && inputChar != ',')
+            {
+                e.Handled = true; // Отменяем ввод, если символ не разрешён
+                return;
+            }
+        }
+
+        public void PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            TextBox textBox = (TextBox)sender;
+
+            // Блокируем пробел
+            if (e.Key == Key.Space)
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
         public void SaveSettings()
         {
             // --- Курсор ---
@@ -109,10 +143,25 @@ namespace CBTM
             // --- Подсветка ---
             Brightness = BrightnessSlider.Value;
             IsGradient = Gradient.IsChecked == true;
-            IsMonoColor = MonoColor.IsChecked == true;
-            ColorValue = ColorInputBox.Text;
+            //IsMonoColor = MonoColor.IsChecked == true;
             GradientSpeed = SpeedG.Value;
 
+            // --- Проверка ColorValue ---
+            if(IsMonoColor = MonoColor.IsChecked == true) { ColorValue = ColorInputBox.Text; }
+            
+           
+
+            var colorPattern = @"^\d{3}[.,;]\d{3}[.,;]\d{3}$";
+            var regex = new System.Text.RegularExpressions.Regex(colorPattern);
+            if (MonoColor.IsChecked == true)
+            {
+                if (!regex.IsMatch(ColorValue))
+                {
+                    MessageBox.Show("Недопустимый формат цвета. Используйте формат: xxxyxxxyxxx (где x — цифра, y — . или ; или ,).",
+                                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return; // Прерываем выполнение
+                }
+            }
             // --- Клавиши ---
             M1Value = M1.Text;
             M2Value = M2.Text;
@@ -339,8 +388,8 @@ namespace CBTM
             buttonStyle.Setters.Add(new Setter(Button.BorderBrushProperty, Brushes.Gray));
             buttonStyle.Setters.Add(new Setter(Button.CursorProperty, Cursors.Hand));
             buttonStyle.Setters.Add(new Setter(Button.PaddingProperty, new Thickness(12, 6, 12, 6)));
-            buttonStyle.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 30.0)); // ✅ Правильно
-            buttonStyle.Setters.Add(new Setter(FrameworkElement.MinWidthProperty, 80.0));  // ✅ Правильно
+            buttonStyle.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 30.0)); 
+            buttonStyle.Setters.Add(new Setter(FrameworkElement.MinWidthProperty, 80.0));  
 
             // Триггер: при наведении — синий фон
             buttonStyle.Triggers.Add(new Trigger
@@ -354,7 +403,7 @@ namespace CBTM
         }
             });
 
-            var nextButton = new Button { Content = "Далее", Style = buttonStyle };
+            var nextButton = new Button { Content = "Сохранить", Style = buttonStyle };
             var cancelButton = new Button { Content = "Отмена", Style = buttonStyle };
 
             buttonStack.Children.Add(nextButton);
@@ -397,8 +446,6 @@ namespace CBTM
                         temp = 0;   
                     }
 
-
-                    dialog.Close();
                 }
             };
 
@@ -477,7 +524,6 @@ namespace CBTM
             lockoutDialog.ShowDialog();
         }
 
-       
-
+        
     }
 }

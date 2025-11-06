@@ -154,7 +154,7 @@
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="Цвет:" Width="60" IsEnabled="{Binding ElementName=MonoColor, Path=IsChecked}"/>
-                            <TextBox x:Name="ColorInputBox" Text="RGB" Width="100" IsEnabled="{Binding ElementName=MonoColor, Path=IsChecked}"/>
+                            <TextBox x:Name="ColorInputBox" Text="000.000.000" Width="89" TextAlignment="Center" IsEnabled="{Binding ElementName=MonoColor, Path=IsChecked}"  PreviewTextInput="ColorInputBox_PreviewTextInput"/>
                         </StackPanel>
 
                         <Label Content="Скорость изменения градиента:" IsEnabled="{Binding ElementName=Gradient, Path=IsChecked}"/>
