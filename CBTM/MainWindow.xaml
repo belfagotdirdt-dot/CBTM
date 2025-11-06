@@ -4,7 +4,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="Bluetooth Mouse Settings" Height="743" Width="500"
+        Title="CRM" Height="743" Width="500"
         Background="Black" Foreground="Gray"
         FontFamily="Segoe UI" FontSize="14">
 
