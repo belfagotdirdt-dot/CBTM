@@ -10,6 +10,9 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using System.IO.Ports;
+
+
 
 namespace CBTM
 {
@@ -20,28 +23,72 @@ namespace CBTM
     {
 
         // --- Переменные для хранения значений из XAML ---
-        public bool InvertX { get; set; }
-        public bool InvertY { get; set; }
-        public string Sensitivity { get; set; } = "1";
+        //public bool InvertX { get; set; }
+        //public bool InvertY { get; set; }
+        //public string Sensitivity { get; set; } = "1";
 
-        public double Brightness { get; set; } = 50;
-        public bool IsGradient { get; set; } = true;
-        public bool IsMonoColor { get; set; } = false;
-        public string ColorValue { get; set; } = "000.000.000";
-        public double GradientSpeed { get; set; } = 50;
+        //public double Brightness { get; set; } = 50;
+        //public bool IsGradient { get; set; } = true;
+        //public bool IsMonoColor { get; set; } = false;
+        //public string ColorValue { get; set; } = "000.000.000";
+        //public double GradientSpeed { get; set; } = 50;
 
-        public string M1Value { get; set; } = "left click";
-        public string M2Value { get; set; } = "right click";
-        public string M3Value { get; set; } = "middle click";
-        public string M4Value { get; set; } = "back";
-        public string M5Value { get; set; } = "forward";
-        public string M6Value { get; set; } = "Volume Up";
-        public string M7Value { get; set; } = "Volume Down";
-        public string M8Value { get; set; } = "Mute";
-        public string M9Value { get; set; } = "Task View";
-        // --- Переменная для хранения текущего пароля ---
-        private string CurrentPassword = "1234"; // Установите ваш пароль по умолчанию
+        //public string M1Value { get; set; } = "left click";
+        //public string M2Value { get; set; } = "right click";
+        //public string M3Value { get; set; } = "middle click";
+        //public string M4Value { get; set; } = "back";
+        //public string M5Value { get; set; } = "forward";
+        //public string M6Value { get; set; } = "Volume Up";
+        //public string M7Value { get; set; } = "Volume Down";
+        //public string M8Value { get; set; } = "Mute";
+        //public string M9Value { get; set; } = "Task View";
+        //// --- Переменная для хранения текущего пароля ---
+        //private string CurrentPassword = "1234"; // Установите ваш пароль по умолчанию
         public int temp = 0;
+
+
+
+        public struct MouseSettings
+        {
+            // --- Курсор ---
+            public bool InvertX { get; set; }
+            public bool InvertY { get; set; }
+            public string Sensitivity { get; set; } = "1";
+
+            // --- Подсветка ---
+            public double Brightness { get; set; } = 50;
+            public bool IsGradient { get; set; } = true;
+            public bool IsMonoColor { get; set; } = false;
+            public string ColorValue { get; set; } = "000.000.000";
+            public double GradientSpeed { get; set; } = 50;
+
+            // --- Клавиши ---
+            public string M1Value { get; set; } = "left click";
+            public string M2Value { get; set; } = "right click";
+            public string M3Value { get; set; } = "middle click";
+            public string M4Value { get; set; } = "back";
+            public string M5Value { get; set; } = "forward";
+            public string M6Value { get; set; } = "Volume Up";
+            public string M7Value { get; set; } = "Volume Down";
+            public string M8Value { get; set; } = "Mute";
+            public string M9Value { get; set; } = "Task View";
+           public string CurrentPassword { get; set; } = "1234";
+
+            // --- Серийный порт ---
+            public SerialPort SerialPort { get; set; }
+
+           
+
+            // ✅ Явный конструктор — решает ошибку CS8983
+            public MouseSettings()
+            {
+                // Конструктор по умолчанию — все поля уже инициализированы.
+                // Можно оставить пустым — если значения заданы в объявлении.
+            }
+        }
+
+        private MouseSettings Settings = new MouseSettings();
+
 
         public MainWindow()
         {
@@ -53,32 +100,44 @@ namespace CBTM
             ColorInputBox.PreviewKeyDown += PreviewKeyDown;
             SensitivityTextBox.PreviewKeyDown += PreviewKeyDown;
 
+
+            Gradient.Checked += (s, e) =>
+            {
+                SpeedG.Background = new SolidColorBrush(Color.FromRgb(34, 34, 34)); 
+            };
+
+            MonoColor.Checked += (s, e) =>
+            {
+                SpeedG.Background = new SolidColorBrush(Color.FromRgb(100, 100, 100)); // Серый
+            };
+
         }
 
         public void Reset()
         {
             // --- Курсор ---
-            InvertXCheckbox.IsChecked = false;
-            InvertYCheckbox.IsChecked = false;
-            SensitivityTextBox.Text = "1";
+            InvertXCheckbox.IsChecked = Settings.InvertX = false;
+            InvertYCheckbox.IsChecked = Settings.InvertY = false;
+            SensitivityTextBox.Text = Settings.Sensitivity = "1";
 
             // --- Подсветка ---
-            BrightnessSlider.Value = 50;
-            Gradient.IsChecked = true;  // Устанавливаем "Градиент" как активный
-            MonoColor.IsChecked = false; // "Моноцвет" неактивен
-            ColorInputBox.Text = "000.000.000"; // Базовое значение
-            SpeedG.Value = 50;
+            BrightnessSlider.Value = Settings.Brightness = 50;
+            Gradient.IsChecked = Settings.IsGradient = true;
+            MonoColor.IsChecked = Settings.IsMonoColor = false;
+            ColorInputBox.Text = Settings.ColorValue = "000.000.000";
+            SpeedG.Value = Settings.GradientSpeed = 50;
 
             // --- Клавиши ---
-            M1.Text = "left click";
-            M2.Text = "right click";
-            M3.Text = "middle click";
-            M4.Text = "back";
-            M5.Text = "forward";
-            M6.Text = "Volume Up";
-            M7.Text = "Volume Down";
-            M8.Text = "Mute";
-            M9.Text = "Task View";
+            M1.Text = Settings.M1Value = "left click";
+            M2.Text = Settings.M2Value = "right click";
+            M3.Text = Settings.M3Value = "middle click";
+            M4.Text = Settings.M4Value = "back";
+            M5.Text = Settings.M5Value = "forward";
+            M6.Text = Settings.M6Value = "Volume Up";
+            M7.Text = Settings.M7Value = "Volume Down";
+            M8.Text = Settings.M8Value = "Mute";
+            M9.Text = Settings.M9Value = "Task View";
+
         }
 
         public void SensitivityTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
@@ -136,65 +195,72 @@ namespace CBTM
         public void SaveSettings()
         {
             // --- Курсор ---
-            InvertX = InvertXCheckbox.IsChecked == true;
-            InvertY = InvertYCheckbox.IsChecked == true;
-            Sensitivity = SensitivityTextBox.Text;
+            Settings.InvertX = InvertXCheckbox.IsChecked == true;
+            Settings.InvertY = InvertYCheckbox.IsChecked == true;
+            Settings.Sensitivity = SensitivityTextBox.Text;
 
             // --- Подсветка ---
-            Brightness = BrightnessSlider.Value;
-            IsGradient = Gradient.IsChecked == true;
-            //IsMonoColor = MonoColor.IsChecked == true;
-            GradientSpeed = SpeedG.Value;
+            Settings.Brightness = BrightnessSlider.Value;
+            Settings.IsGradient = Gradient.IsChecked == true;
+            Settings.IsMonoColor = MonoColor.IsChecked == true;
+            Settings.GradientSpeed = SpeedG.Value;
 
             // --- Проверка ColorValue ---
-            if(IsMonoColor = MonoColor.IsChecked == true) { ColorValue = ColorInputBox.Text; }
-            
-           
-
-            var colorPattern = @"^\d{3}[.,;]\d{3}[.,;]\d{3}$";
-            var regex = new System.Text.RegularExpressions.Regex(colorPattern);
-            if (MonoColor.IsChecked == true)
+            if (Settings.IsMonoColor)
             {
-                if (!regex.IsMatch(ColorValue))
+                Settings.ColorValue = ColorInputBox.Text;
+
+                var colorPattern = @"^\d{3}[.,;]\d{3}[.,;]\d{3}$";
+                var regex = new System.Text.RegularExpressions.Regex(colorPattern);
+
+                if (!regex.IsMatch(Settings.ColorValue))
                 {
                     MessageBox.Show("Недопустимый формат цвета. Используйте формат: xxxyxxxyxxx (где x — цифра, y — . или ; или ,).",
                                     "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return; // Прерываем выполнение
                 }
             }
-            // --- Клавиши ---
-            M1Value = M1.Text;
-            M2Value = M2.Text;
-            M3Value = M3.Text;
-            M4Value = M4.Text;
-            M5Value = M5.Text;
-            M6Value = M6.Text;
-            M7Value = M7.Text;
-            M8Value = M8.Text;
-            M9Value = M9.Text;
 
-            //// --- Вывод в терминал ---
-            //Debug.WriteLine("=== Настройки сохранены ===");
-            //Debug.WriteLine($"Инверсия X: {InvertX}");
-            //Debug.WriteLine($"Инверсия Y: {InvertY}");
-            //Debug.WriteLine($"Чувствительность: {Sensitivity}");
-            //Debug.WriteLine($"Яркость: {Brightness}");
-            //Debug.WriteLine($"Градиент: {IsGradient}");
-            //Debug.WriteLine($"Моноцвет: {IsMonoColor}");
-            //Debug.WriteLine($"Цвет: {ColorValue}");
-            //Debug.WriteLine($"Скорость градиента: {GradientSpeed}");
-            //Debug.WriteLine($"M1: {M1Value}");
-            //Debug.WriteLine($"M2: {M2Value}");
-            //Debug.WriteLine($"M3: {M3Value}");
-            //Debug.WriteLine($"M4: {M4Value}");
-            //Debug.WriteLine($"M5: {M5Value}");
-            //Debug.WriteLine($"M6: {M6Value}");
-            //Debug.WriteLine($"M7: {M7Value}");
-            //Debug.WriteLine($"M8: {M8Value}");
-            //Debug.WriteLine($"M9: {M9Value}");
-            //Debug.WriteLine("========================");
+            // --- Клавиши ---
+            Settings.M1Value = M1.Text;
+            Settings.M2Value = M2.Text;
+            Settings.M3Value = M3.Text;
+            Settings.M4Value = M4.Text;
+            Settings.M5Value = M5.Text;
+            Settings.M6Value = M6.Text;
+            Settings.M7Value = M7.Text;
+            Settings.M8Value = M8.Text;
+            Settings.M9Value = M9.Text;
+
+
+            // --- Отправка в Arduino ---
+            try
+            {
+                // Проверяем, что SerialPort существует и открыт
+                if (Settings.SerialPort == null)
+                {
+                    MessageBox.Show("SerialPort не настроен.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                if (!Settings.SerialPort.IsOpen)
+                {
+                    Settings.SerialPort.Open();
+                }
+
+                // Сериализуем данные в строку (пример формата: "invertX,invertY,sensitivity,brightness,color,etc.")
+                string data = $"{(Settings.InvertX ? "1" : "0")},{(Settings.InvertY ? "1" : "0")},{Settings.Sensitivity},{Settings.Brightness},{Settings.IsGradient},{Settings.IsMonoColor},{Settings.ColorValue},{Settings.GradientSpeed},{Settings.M1Value},{Settings.M2Value},{Settings.M3Value},{Settings.M4Value},{Settings.M5Value},{Settings.M6Value},{Settings.M7Value},{Settings.M8Value},{Settings.M9Value}";
+
+                // Отправляем данные в Arduino
+                Settings.SerialPort.WriteLine(data);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при отправке данных в Arduino: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
 
             // Пример: показываем сообщение
+            MessageBox.Show("Настройки сохранены!", "Сохранение", MessageBoxButton.OK, MessageBoxImage.Information);
 
         }
 
@@ -419,11 +485,11 @@ namespace CBTM
                 //                "Введённые данные", MessageBoxButton.OK, MessageBoxImage.Information);
 
                 // Проверяем, совпадает ли старый пароль
-                if (oldPasswordBox.Password == CurrentPassword)
+                if (oldPasswordBox.Password == Settings.CurrentPassword)
                 {
                     if (!string.IsNullOrEmpty(newPasswordBox.Password))
                     {
-                        CurrentPassword = newPasswordBox.Password;
+                        Settings.CurrentPassword = newPasswordBox.Password;
                         MessageBox.Show("Пароль успешно изменён!", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
                         dialog.Close();
                     }
@@ -524,6 +590,7 @@ namespace CBTM
             lockoutDialog.ShowDialog();
         }
 
+       
         
     }
 }
