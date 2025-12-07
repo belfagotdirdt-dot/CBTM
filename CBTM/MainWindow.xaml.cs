@@ -73,11 +73,8 @@ namespace CBTM
             public string M8Value { get; set; } = "Mute";
             public string M9Value { get; set; } = "Task View";
            public string CurrentPassword { get; set; } = "1234";
-
-            // --- Серийный порт ---
             public SerialPort SerialPort { get; set; }
-
-           
+            public string SelectedPortName { get; set; } = ""; 
 
             // ✅ Явный конструктор — решает ошибку CS8983
             public MouseSettings()
@@ -99,6 +96,13 @@ namespace CBTM
             ChangePasswordButton.Click += (sender, e) => OpenChangePasswordDialog();
             ColorInputBox.PreviewKeyDown += PreviewKeyDown;
             SensitivityTextBox.PreviewKeyDown += PreviewKeyDown;
+          
+
+            // ✅ Подписываем ComboBox на выбор порта
+            PortComboBox.SelectionChanged += (s, e) => SelectComPortFromComboBox();
+
+            // ✅ Подписываем на открытие списка — обновляем порты
+            PortComboBox.DropDownOpened += (s, e) => LoadAvailablePorts();
 
 
             Gradient.Checked += (s, e) =>
@@ -110,6 +114,8 @@ namespace CBTM
             {
                 SpeedG.Background = new SolidColorBrush(Color.FromRgb(100, 100, 100)); // Серый
             };
+
+           
 
         }
 
@@ -192,76 +198,44 @@ namespace CBTM
             }
         }
 
-        public void SaveSettings()
+        private void SelectComPortFromComboBox()
         {
-            // --- Курсор ---
-            Settings.InvertX = InvertXCheckbox.IsChecked == true;
-            Settings.InvertY = InvertYCheckbox.IsChecked == true;
-            Settings.Sensitivity = SensitivityTextBox.Text;
-
-            // --- Подсветка ---
-            Settings.Brightness = BrightnessSlider.Value;
-            Settings.IsGradient = Gradient.IsChecked == true;
-            Settings.IsMonoColor = MonoColor.IsChecked == true;
-            Settings.GradientSpeed = SpeedG.Value;
-
-            // --- Проверка ColorValue ---
-            if (Settings.IsMonoColor)
+            if (PortComboBox.SelectedItem == null || PortComboBox.SelectedItem.ToString() == "Нет портов")
             {
-                Settings.ColorValue = ColorInputBox.Text;
-
-                var colorPattern = @"^\d{3}[.,;]\d{3}[.,;]\d{3}$";
-                var regex = new System.Text.RegularExpressions.Regex(colorPattern);
-
-                if (!regex.IsMatch(Settings.ColorValue))
-                {
-                    MessageBox.Show("Недопустимый формат цвета. Используйте формат: xxxyxxxyxxx (где x — цифра, y — . или ; или ,).",
-                                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return; // Прерываем выполнение
-                }
+                return;
             }
 
-            // --- Клавиши ---
-            Settings.M1Value = M1.Text;
-            Settings.M2Value = M2.Text;
-            Settings.M3Value = M3.Text;
-            Settings.M4Value = M4.Text;
-            Settings.M5Value = M5.Text;
-            Settings.M6Value = M6.Text;
-            Settings.M7Value = M7.Text;
-            Settings.M8Value = M8.Text;
-            Settings.M9Value = M9.Text;
+            string selectedPort = PortComboBox.SelectedItem.ToString();
 
-
-            // --- Отправка в Arduino ---
             try
             {
-                // Проверяем, что SerialPort существует и открыт
-                if (Settings.SerialPort == null)
+                // Закрываем предыдущий порт, если был
+                if (Settings.SerialPort != null && Settings.SerialPort.IsOpen)
                 {
-                    MessageBox.Show("SerialPort не настроен.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
+                    Settings.SerialPort.Close();
                 }
 
-                if (!Settings.SerialPort.IsOpen)
-                {
-                    Settings.SerialPort.Open();
-                }
+                // Создаём новый SerialPort
+                Settings.SerialPort = new System.IO.Ports.SerialPort(selectedPort, 9600);
+                Settings.SerialPort.Open();
 
-                // Сериализуем данные в строку (пример формата: "invertX,invertY,sensitivity,brightness,color,etc.")
-                string data = $"{(Settings.InvertX ? "1" : "0")},{(Settings.InvertY ? "1" : "0")},{Settings.Sensitivity},{Settings.Brightness},{Settings.IsGradient},{Settings.IsMonoColor},{Settings.ColorValue},{Settings.GradientSpeed},{Settings.M1Value},{Settings.M2Value},{Settings.M3Value},{Settings.M4Value},{Settings.M5Value},{Settings.M6Value},{Settings.M7Value},{Settings.M8Value},{Settings.M9Value}";
-
-                // Отправляем данные в Arduino
-                Settings.SerialPort.WriteLine(data);
+                // ✅ Сохраняем имя порта
+                Settings.SelectedPortName = selectedPort;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка при отправке данных в Arduino: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show($"Не удалось подключиться: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+                // Сбрасываем выбор, если не удалось подключиться
+                if (!string.IsNullOrEmpty(Settings.SelectedPortName))
+                {
+                    PortComboBox.SelectedItem = Settings.SelectedPortName;
+                }
+                else
+                {
+                    PortComboBox.SelectedIndex = -1;
+                }
             }
-
-            // Пример: показываем сообщение
-            MessageBox.Show("Настройки сохранены!", "Сохранение", MessageBoxButton.OK, MessageBoxImage.Information);
-
         }
 
         private void OpenChangePasswordDialog()
@@ -522,6 +496,10 @@ namespace CBTM
             dialog.ShowDialog();
         }
 
+
+       
+
+
         public void ShowLockoutDialog()
         {
             var lockoutDialog = new Window
@@ -590,7 +568,107 @@ namespace CBTM
             lockoutDialog.ShowDialog();
         }
 
-       
-        
+        public void SaveSettings()
+        {
+            // --- Курсор ---
+            Settings.InvertX = InvertXCheckbox.IsChecked == true;
+            Settings.InvertY = InvertYCheckbox.IsChecked == true;
+            Settings.Sensitivity = SensitivityTextBox.Text;
+
+            // --- Подсветка ---
+            Settings.Brightness = BrightnessSlider.Value;
+            Settings.IsGradient = Gradient.IsChecked == true;
+            Settings.IsMonoColor = MonoColor.IsChecked == true;
+            Settings.GradientSpeed = SpeedG.Value;
+
+            // --- Проверка ColorValue ---
+            if (Settings.IsMonoColor)
+            {
+                Settings.ColorValue = ColorInputBox.Text;
+
+                var colorPattern = @"^\d{3}[.,;]\d{3}[.,;]\d{3}$";
+                var regex = new System.Text.RegularExpressions.Regex(colorPattern);
+
+                if (!regex.IsMatch(Settings.ColorValue))
+                {
+                    MessageBox.Show("Недопустимый формат цвета. Используйте формат: xxxyxxxyxxx (где x — цифра, y — . или ; или ,).",
+                                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return; // Прерываем выполнение
+                }
+            }
+
+            // --- Клавиши ---
+            Settings.M1Value = M1.Text;
+            Settings.M2Value = M2.Text;
+            Settings.M3Value = M3.Text;
+            Settings.M4Value = M4.Text;
+            Settings.M5Value = M5.Text;
+            Settings.M6Value = M6.Text;
+            Settings.M7Value = M7.Text;
+            Settings.M8Value = M8.Text;
+            Settings.M9Value = M9.Text;
+
+            // --- Отправка в Arduino ---
+            try
+            {
+                // ✅ Проверяем, что SerialPort существует и открыт
+                if (Settings.SerialPort == null || !Settings.SerialPort.IsOpen)
+                {
+                    MessageBox.Show("COM-порт не подключен.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Сериализуем данные в строку (пример формата: "invertX,invertY,sensitivity,brightness,color,etc.")
+                string data = $"{(Settings.InvertX ? "1" : "0")},{(Settings.InvertY ? "1" : "0")},{Settings.Sensitivity},{Settings.Brightness},{Settings.IsGradient},{Settings.IsMonoColor},{Settings.ColorValue},{Settings.GradientSpeed},{Settings.M1Value},{Settings.M2Value},{Settings.M3Value},{Settings.M4Value},{Settings.M5Value},{Settings.M6Value},{Settings.M7Value},{Settings.M8Value},{Settings.M9Value}";
+
+                // Отправляем данные в Arduino
+                Settings.SerialPort.WriteLine(data);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при отправке данных в Arduino: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+
+            // Пример: показываем сообщение
+            MessageBox.Show("Настройки сохранены и отправлены в Arduino!", "Сохранение", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void LoadAvailablePorts()
+        {
+            PortComboBox.Items.Clear();
+
+            string[] ports = System.IO.Ports.SerialPort.GetPortNames();
+
+            foreach (string port in ports)
+            {
+                PortComboBox.Items.Add(port);
+            }
+
+            // Если есть сохранённый порт — выбираем его
+            if (!string.IsNullOrEmpty(Settings.SelectedPortName))
+            {
+                if (ports.Contains(Settings.SelectedPortName))
+                {
+                    PortComboBox.SelectedItem = Settings.SelectedPortName;
+                }
+                else
+                {
+                    Settings.SelectedPortName = null; // Сбрасываем, если порт исчез
+                    PortComboBox.SelectedIndex = -1;
+                }
+            }
+            else if (PortComboBox.Items.Count > 0)
+            {
+                PortComboBox.SelectedIndex = 0;
+            }
+            else
+            {
+                PortComboBox.Items.Add("Нет портов");
+                PortComboBox.SelectedIndex = 0;
+            }
+        }
+
+
+
     }
 }
