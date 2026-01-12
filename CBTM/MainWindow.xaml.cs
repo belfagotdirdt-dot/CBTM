@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Linq;
 
 namespace CBTM
 {
@@ -62,65 +63,229 @@ namespace CBTM
         }
 
         private MouseSettings Settings = new MouseSettings();
-        public int temp = 0;
+        private bool _isConnectionTesting = false;
 
         public MainWindow()
         {
             InitializeComponent();
-            Debug.WriteLine("op");
+            Debug.WriteLine("Инициализация главного окна");
+
+            // Привязка обработчиков событий
             ResetButton.Click += (sender, e) => RequestSettingsFromArduino();
             SaveButton.Click += (sender, e) => SaveSettings();
             ChangePasswordButton.Click += (sender, e) => OpenChangePasswordDialog();
 
+            // Обработчики для полей ввода
             ColorInputBox.PreviewTextInput += ColorInputBox_PreviewTextInput;
-            SensitivityTextBox.PreviewTextInput += SensitivityTextBox_PreviewTextInput;
+            SensitivityTextBox.PreviewKeyDown += SensitivityTextBox_PreviewKeyDown;
+            SensitivityTextBox.LostFocus += SensitivityTextBox_LostFocus;
+            DataObject.AddPastingHandler(SensitivityTextBox, SensitivityTextBox_PastingHandler);
 
+            // Загрузка доступных портов
             LoadAvailablePorts();
 
+            // Обработчики для ComboBox портов
             PortComboBox.SelectionChanged += (s, e) => SelectComPortFromComboBox();
             PortComboBox.DropDownOpened += (s, e) => LoadAvailablePorts();
 
-            Gradient.Checked += (s, e) => SpeedG.Background = new SolidColorBrush(Color.FromRgb(34, 34, 34));
-            MonoColor.Checked += (s, e) => SpeedG.Background = new SolidColorBrush(Color.FromRgb(100, 100, 100));
+            // Обработчики для переключателей подсветки
+            Gradient.Checked += (s, e) =>
+            {
+                SpeedG.Background = new SolidColorBrush(Color.FromRgb(34, 34, 34));
+                SpeedG.IsEnabled = true;
+                ColorInputBox.IsEnabled = false;
+            };
+
+            MonoColor.Checked += (s, e) =>
+            {
+                SpeedG.Background = new SolidColorBrush(Color.FromRgb(100, 100, 100));
+                SpeedG.IsEnabled = false;
+                ColorInputBox.IsEnabled = true;
+            };
+
+            // Инициализация состояния элементов
+            SpeedG.Background = new SolidColorBrush(Color.FromRgb(34, 34, 34));
+            SpeedG.IsEnabled = true;
+            ColorInputBox.IsEnabled = false;
         }
 
-        private void RequestSettingsFromArduino()
+        #region Серийная связь и подключение
+
+        private void LoadAvailablePorts()
         {
-            if (Settings.SerialPort == null || !Settings.SerialPort.IsOpen)
+            try
             {
-                MessageBox.Show("COM-порт не подключен.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                PortComboBox.Items.Clear();
+                PortComboBox.Items.Add("не выбран");
+
+                string[] ports = SerialPort.GetPortNames();
+                foreach (string port in ports)
+                {
+                    PortComboBox.Items.Add(port);
+                }
+
+                // Восстановление предыдущего выбора
+                if (!string.IsNullOrEmpty(Settings.SelectedPortName))
+                {
+                    if (Array.Exists(ports, p => p == Settings.SelectedPortName))
+                    {
+                        PortComboBox.SelectedItem = Settings.SelectedPortName;
+                    }
+                    else
+                    {
+                        Settings.SelectedPortName = "";
+                        Settings.SerialPort = null;
+                        PortComboBox.SelectedIndex = 0;
+                    }
+                }
+                else
+                {
+                    PortComboBox.SelectedIndex = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Ошибка загрузки портов: {ex.Message}");
+                MessageBox.Show($"Ошибка загрузки портов: {ex.Message}",
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void SelectComPortFromComboBox()
+        {
+            if (PortComboBox.SelectedItem == null ||
+                PortComboBox.SelectedItem.ToString() == "не выбран")
+            {
+                if (Settings.SerialPort != null && Settings.SerialPort.IsOpen)
+                {
+                    try
+                    {
+                        Settings.SerialPort.Close();
+                        Debug.WriteLine($"Порт {Settings.SerialPort.PortName} закрыт");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Ошибка закрытия порта: {ex.Message}");
+                    }
+                    Settings.SerialPort = null;
+                }
+                Settings.SelectedPortName = "";
                 return;
             }
 
+            string selectedPort = PortComboBox.SelectedItem.ToString();
+
             try
             {
-                Debug.WriteLine("=== Запрос настроек ===");
+                // Закрываем предыдущее соединение
+                if (Settings.SerialPort != null && Settings.SerialPort.IsOpen)
+                {
+                    Settings.SerialPort.Close();
+                }
+
+                // Создаем новое подключение
+                Settings.SerialPort = new SerialPort(selectedPort, 9600)
+                {
+                    ReadTimeout = 3000,
+                    WriteTimeout = 3000,
+                    NewLine = "\n",
+                    Parity = Parity.None,
+                    DataBits = 8,
+                    StopBits = StopBits.One,
+                    Handshake = Handshake.None,
+                    Encoding = Encoding.ASCII
+                };
+
+                Settings.SerialPort.Open();
+
+                if (!Settings.SerialPort.IsOpen)
+                {
+                    MessageBox.Show($"Не удалось открыть порт {selectedPort}.", "Ошибка",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    PortComboBox.SelectedIndex = 0;
+                    return;
+                }
+
+                Settings.SelectedPortName = selectedPort;
+
+                // Даем Arduino время на инициализацию
+                System.Threading.Thread.Sleep(2000);
+
+                // Очистка буферов
+                Settings.SerialPort.DiscardInBuffer();
+                Settings.SerialPort.DiscardOutBuffer();
+
+                // Проверяем соединение
+                if (TestArduinoConnection())
+                {
+                    MessageBox.Show($"Успешно подключено к {selectedPort}", "Подключение",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show($"Подключено к {selectedPort}, но Arduino не отвечает.\nПроверьте код на Arduino.",
+                        "Внимание", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                MessageBox.Show($"Порт {selectedPort} занят другим приложением.", "Ошибка",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                PortComboBox.SelectedIndex = 0;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка подключения к {selectedPort}: {ex.Message}",
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                PortComboBox.SelectedIndex = 0;
+            }
+        }
+
+        private bool TestArduinoConnection()
+        {
+            if (_isConnectionTesting) return false;
+            _isConnectionTesting = true;
+
+            try
+            {
+                if (Settings.SerialPort == null || !Settings.SerialPort.IsOpen)
+                {
+                    Debug.WriteLine("Порт не открыт");
+                    return false;
+                }
+
+                Debug.WriteLine("=== Тестирование связи с Arduino ===");
 
                 // Очистка буферов
                 Settings.SerialPort.DiscardInBuffer();
                 Settings.SerialPort.DiscardOutBuffer();
                 System.Threading.Thread.Sleep(100);
 
-                // Отправка команды
-                Settings.SerialPort.WriteLine("GET_SETTINGS");
-                Debug.WriteLine("Отправлено: GET_SETTINGS");
+                // Отправка команды PING
+                Settings.SerialPort.WriteLine("PING");
+                Debug.WriteLine("Отправлено: PING");
 
-                // Чтение ответа
-                string response = ReadSerialResponse(3000);
+                // Чтение ответа с таймаутом
+                string response = ReadSerialResponse(2000);
 
-                if (!string.IsNullOrEmpty(response))
+                if (!string.IsNullOrEmpty(response) &&
+                    (response.Contains("PONG") || response.Contains("READY")))
                 {
-                    UpdateSettingsFromArduino(response);
+                    Debug.WriteLine("Связь подтверждена!");
+                    return true;
                 }
-                else
-                {
-                    MessageBox.Show("Не удалось получить ответ от Arduino. Проверьте соединение.",
-                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
+
+                Debug.WriteLine("Таймаут ожидания ответа");
+                return false;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                Debug.WriteLine($"Ошибка тестирования связи: {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                _isConnectionTesting = false;
             }
         }
 
@@ -142,7 +307,6 @@ namespace CBTM
                             string line = Settings.SerialPort.ReadLine().TrimEnd('\r', '\n');
                             Debug.WriteLine($"Получено: '{line}'");
 
-                            // Принимаем все ответы, кроме пустых
                             if (!string.IsNullOrWhiteSpace(line))
                             {
                                 // Если строка содержит настройки (есть запятые)
@@ -151,8 +315,9 @@ namespace CBTM
                                     return line;
                                 }
 
-                                // Или это подтверждение OK
-                                if (line.Contains("OK") || line.Contains("PONG") || line.Contains("READY"))
+                                // Или это подтверждение
+                                if (line.Contains("OK") || line.Contains("PONG") ||
+                                    line.Contains("READY") || line.Contains("DEBUG"))
                                 {
                                     return line;
                                 }
@@ -175,6 +340,52 @@ namespace CBTM
             }
 
             return responseBuilder.Length > 0 ? responseBuilder.ToString().Trim() : null;
+        }
+
+        #endregion
+
+        #region Работа с настройками
+
+        private void RequestSettingsFromArduino()
+        {
+            if (Settings.SerialPort == null || !Settings.SerialPort.IsOpen)
+            {
+                MessageBox.Show("COM-порт не подключен.", "Ошибка",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                Debug.WriteLine("=== Запрос настроек ===");
+
+                // Очистка буферов
+                Settings.SerialPort.DiscardInBuffer();
+                Settings.SerialPort.DiscardOutBuffer();
+                System.Threading.Thread.Sleep(100);
+
+                // Отправка команды
+                Settings.SerialPort.WriteLine("GET_SETTINGS");
+                Debug.WriteLine("Отправлено: GET_SETTINGS");
+
+                // Чтение ответа
+                string response = ReadSerialResponse(3000);
+
+                if (!string.IsNullOrEmpty(response) && response.Contains(","))
+                {
+                    UpdateSettingsFromArduino(response);
+                }
+                else
+                {
+                    MessageBox.Show("Не удалось получить ответ от Arduino. Проверьте соединение.",
+                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка: {ex.Message}", "Ошибка",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private void UpdateSettingsFromArduino(string data)
@@ -240,7 +451,8 @@ namespace CBTM
             {
                 if (Settings.SerialPort == null || !Settings.SerialPort.IsOpen)
                 {
-                    MessageBox.Show("COM-порт не подключен.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show("COM-порт не подключен.", "Ошибка",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
@@ -292,6 +504,63 @@ namespace CBTM
                    $"{Settings.CurrentPassword}";
         }
 
+        // ЕДИНСТВЕННЫЙ метод SaveSettings
+        private void SaveSettings()
+        {
+            // Собираем настройки с формы
+            Settings.InvertX = InvertXCheckbox.IsChecked == true;
+            Settings.InvertY = InvertYCheckbox.IsChecked == true;
+
+            // Обработка чувствительности - удаляем ведущие нули
+            string sensitivityText = SensitivityTextBox.Text.TrimStart('0');
+            if (string.IsNullOrEmpty(sensitivityText))
+            {
+                sensitivityText = "0";
+            }
+            Settings.Sensitivity = sensitivityText;
+
+            Settings.Brightness = BrightnessSlider.Value;
+            Settings.IsGradient = Gradient.IsChecked == true;
+            Settings.IsMonoColor = MonoColor.IsChecked == true;
+            Settings.GradientSpeed = SpeedG.Value;
+            Settings.ColorValue = ColorInputBox.Text;
+
+            Settings.M1Value = M1.Text;
+            Settings.M2Value = M2.Text;
+            Settings.M3Value = M3.Text;
+            Settings.M4Value = M4.Text;
+            Settings.M5Value = M5.Text;
+            Settings.M6Value = M6.Text;
+            Settings.M7Value = M7.Text;
+            Settings.M8Value = M8.Text;
+            Settings.M9Value = M9.Text;
+
+            // Валидация цвета
+            if (Settings.IsMonoColor && !ValidateColorFormat(Settings.ColorValue))
+            {
+                MessageBox.Show("Недопустимый формат цвета. Используйте формат: xxx.yyy.zzz (где xxx, yyy, zzz - числа от 000 до 255).",
+                                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            // Валидация чувствительности
+            if (!int.TryParse(Settings.Sensitivity, out int sens) || sens < 0)
+            {
+                MessageBox.Show("Чувствительность должна быть неотрицательным числом.",
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (sens > 9999)
+            {
+                MessageBox.Show("Чувствительность не должна превышать 9999.",
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            SendSettingsToArduino();
+        }
+
         private bool ValidateColorFormat(string colorValue)
         {
             var colorPattern = @"^\d{3}[.,;]\d{3}[.,;]\d{3}$";
@@ -299,169 +568,131 @@ namespace CBTM
             return regex.IsMatch(colorValue);
         }
 
-        private void SelectComPortFromComboBox()
-        {
-            if (PortComboBox.SelectedItem == null ||
-                PortComboBox.SelectedItem.ToString() == "не выбран")
-            {
-                if (Settings.SerialPort != null && Settings.SerialPort.IsOpen)
-                {
-                    Console.WriteLine("EEEEE " + Settings.SerialPort.PortName);
-                    Settings.SerialPort.Close();
-                    Settings.SerialPort = null;
-                }
-                Settings.SelectedPortName = "";
-                return;
-            }
+        #endregion
 
-            string selectedPort = PortComboBox.SelectedItem.ToString();
+        #region Валидация ввода
 
-            try
-            {
-                if (Settings.SerialPort != null && Settings.SerialPort.IsOpen)
-                {
-                    Settings.SerialPort.Close();
-                }
-
-                Settings.SerialPort = new SerialPort(selectedPort, 9600)
-                {
-                    ReadTimeout = 3000,
-                    WriteTimeout = 3000,
-                    NewLine = "\n",
-                    Parity = Parity.None,
-                    DataBits = 8,
-                    StopBits = StopBits.One,
-                    Handshake = Handshake.None
-                };
-
-                Settings.SerialPort.Open();
-
-                if (!Settings.SerialPort.IsOpen)
-                {
-                    MessageBox.Show($"Не удалось открыть порт {selectedPort}.", "Ошибка",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                Settings.SelectedPortName = selectedPort;
-
-                // Даем Arduino время на инициализацию
-                System.Threading.Thread.Sleep(3000);
-
-                // Очистка буферов
-                Settings.SerialPort.DiscardInBuffer();
-                Settings.SerialPort.DiscardOutBuffer();
-
-                // Проверяем соединение
-                if (TestArduinoConnection())
-                {
-                    MessageBox.Show($"Успешно подключено к {selectedPort}", "Подключение",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                else
-                {
-                    MessageBox.Show($"Подключено к {selectedPort}, но Arduino не отвечает.\nПроверьте код на Arduino.",
-                        "Внимание", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка подключения к {selectedPort}: {ex.Message}",
-                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                PortComboBox.SelectedIndex = 0;
-            }
-        }
-
-        private bool TestArduinoConnection()
-        {
-            try
-            {
-                if (Settings.SerialPort == null || !Settings.SerialPort.IsOpen)
-                
-                    return false;
-                Console.WriteLine("sadassad");
-
-                Debug.WriteLine("=== Тестирование связи с Arduino ===");
-
-                // Очистка буферов
-                Settings.SerialPort.DiscardInBuffer();
-                Settings.SerialPort.DiscardOutBuffer();
-                System.Threading.Thread.Sleep(100);
-
-                // Отправка команды PING
-                Settings.SerialPort.WriteLine("PING");
-                Debug.WriteLine("Отправлено: PING");
-
-                // Ожидание ответа
-                DateTime start = DateTime.Now;
-                while ((DateTime.Now - start).TotalMilliseconds < 2000)
-                {
-                    if (Settings.SerialPort.BytesToRead > 0)
-                    {
-                        try
-                        {
-                            string response = Settings.SerialPort.ReadLine();
-                            response = response.TrimEnd('\r', '\n');
-                            Debug.WriteLine($"Получен ответ: '{response}'");
-                
-                            if (response.Contains("PONG") ||
-                                response.Contains("READY") ||
-                                response.Contains("DEBUG") ||
-                                response.Contains("STATUS:"))
-                            {
-                                Debug.WriteLine("Связь подтверждена!");
-                                break;
-                            }
-                        }
-                        catch (TimeoutException)
-                        {
-                            continue;
-                        }
-                    }
-                    System.Threading.Thread.Sleep(10);
-                }
-
-                Settings.SerialPort.DiscardInBuffer();
-                Settings.SerialPort.DiscardOutBuffer();
-                System.Threading.Thread.Sleep(100);
-
-                // Отправка команды
-                Settings.SerialPort.WriteLine("GET_SETTINGS");
-                Debug.WriteLine("Отправлено: GET_SETTINGS");
-
-                // Чтение ответа
-                string readSerialResponse = ReadSerialResponse(3000);
-
-                if (!string.IsNullOrEmpty(readSerialResponse))
-                {
-                    UpdateSettingsFromArduino(readSerialResponse);
-                    return true;
-                }
-                
-                Debug.WriteLine("Таймаут ожидания ответа");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Ошибка тестирования связи: {ex.Message}");
-                return false;
-            }
-        }
-
-        public void SensitivityTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        private void SensitivityTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
         {
             TextBox textBox = (TextBox)sender;
 
-            if (textBox.Text.Length >= 4)
+            // Разрешаем все управляющие клавиши
+            if (e.Key == Key.Back || e.Key == Key.Delete ||
+                e.Key == Key.Left || e.Key == Key.Right ||
+                e.Key == Key.Home || e.Key == Key.End ||
+                e.Key == Key.Tab || e.Key == Key.Enter ||
+                e.Key == Key.Escape)
             {
-                e.Handled = true;
                 return;
             }
 
-            if (!char.IsDigit(e.Text, e.Text.Length - 1))
+            // Разрешаем цифры 0-9
+            if ((e.Key >= Key.D0 && e.Key <= Key.D9) ||
+                (e.Key >= Key.NumPad0 && e.Key <= Key.NumPad9))
             {
-                e.Handled = true;
+                // Проверяем максимальную длину
+                if (textBox.Text.Length >= 4)
+                {
+                    e.Handled = true;
+                    return;
+                }
+
+                // Если текст пустой и вводится 0 - блокируем
+                if (textBox.Text.Length == 0 &&
+                    (e.Key == Key.D0 || e.Key == Key.NumPad0))
+                {
+                    e.Handled = true;
+                    MessageBox.Show("Чувствительность не может начинаться с нуля.",
+                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                return; // Разрешаем ввод цифры
+            }
+
+            // Блокируем все остальные клавиши (буквы, символы и т.д.)
+            e.Handled = true;
+        }
+
+        private void SensitivityTextBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(SensitivityTextBox.Text))
+            {
+                SensitivityTextBox.Text = "1";
                 return;
+            }
+
+            // Удаляем ведущие нули
+            string cleanedText = SensitivityTextBox.Text.TrimStart('0');
+
+            // Если после удаления нулей ничего не осталось, ставим "0"
+            if (string.IsNullOrEmpty(cleanedText))
+            {
+                cleanedText = "0";
+            }
+
+            if (!int.TryParse(cleanedText, out int value) || value < 0)
+            {
+                MessageBox.Show("Чувствительность должна быть положительным числом или нулём",
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                SensitivityTextBox.Text = "1";
+            }
+            else if (value > 9999)
+            {
+                MessageBox.Show("Чувствительность не должна превышать 9999",
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                SensitivityTextBox.Text = "9999";
+            }
+            else
+            {
+                // Сохраняем очищенное значение
+                SensitivityTextBox.Text = cleanedText;
+            }
+        }
+
+        private void SensitivityTextBox_PastingHandler(object sender, DataObjectPastingEventArgs e)
+        {
+            if (e.DataObject.GetDataPresent(typeof(string)))
+            {
+                string pasteText = (string)e.DataObject.GetData(typeof(string));
+                TextBox textBox = (TextBox)sender;
+
+                // Удаляем пробелы и другие нецифровые символы
+                string cleanPaste = new string(pasteText.Where(char.IsDigit).ToArray());
+
+                // Если после очистки ничего не осталось, отменяем вставку
+                if (string.IsNullOrEmpty(cleanPaste))
+                {
+                    e.CancelCommand();
+                    MessageBox.Show("Вставляемый текст должен содержать цифры.",
+                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Проверяем, что если текст пустой, то вставляемый текст не начинается с "0"
+                if (textBox.Text.Length == 0 && cleanPaste.StartsWith("0"))
+                {
+                    e.CancelCommand();
+                    MessageBox.Show("Чувствительность не может начинаться с нуля.",
+                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Проверяем, что общая длина не превышает 4 символа
+                if (textBox.Text.Length + cleanPaste.Length > 4)
+                {
+                    e.CancelCommand();
+                    MessageBox.Show("Чувствительность не может превышать 4 цифры.",
+                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Если все проверки пройдены, заменяем вставляемый текст на очищенный
+                e.DataObject.SetData(typeof(string), cleanPaste);
+            }
+            else
+            {
+                e.CancelCommand();
             }
         }
 
@@ -483,17 +714,13 @@ namespace CBTM
             }
         }
 
-        public void PreviewKeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Key == Key.Space)
-            {
-                e.Handled = true;
-            }
-        }
+        #endregion
+
+        #region Изменение пароля
 
         private void OpenChangePasswordDialog()
         {
-            int temp = 0; // Добавляем счетчик попыток
+            int attempts = 0; // Счетчик попыток
 
             var dialog = new Window
             {
@@ -531,12 +758,11 @@ namespace CBTM
             // --- Функция ограничения ввода только цифрами 1-9 ---
             void RestrictToDigits1To9(object sender, TextCompositionEventArgs e)
             {
-                // Проверяем, является ли вводимый символ цифрой от 1 до 9
                 foreach (char c in e.Text)
                 {
                     if (!char.IsDigit(c) || c == '0')
                     {
-                        e.Handled = true; // Блокируем ввод
+                        e.Handled = true;
                         return;
                     }
                 }
@@ -549,33 +775,30 @@ namespace CBTM
                 {
                     string pasteText = (string)e.DataObject.GetData(typeof(string));
 
-                    // Проверяем все символы в вставляемом тексте
                     foreach (char c in pasteText)
                     {
                         if (!char.IsDigit(c) || c == '0')
                         {
-                            e.CancelCommand(); // Отменяем вставку
+                            e.CancelCommand();
                             return;
                         }
                     }
                 }
                 else
                 {
-                    e.CancelCommand(); // Отменяем вставку не текстовых данных
+                    e.CancelCommand();
                 }
             }
 
             // --- Обработчик нажатия клавиш для PasswordBox ---
             void PasswordBox_PreviewKeyDown(object sender, KeyEventArgs e)
             {
-                // Блокируем пробел
                 if (e.Key == Key.Space)
                 {
                     e.Handled = true;
                     return;
                 }
 
-                // Разрешаем управляющие клавиши
                 if (e.Key == Key.Back || e.Key == Key.Delete ||
                     e.Key == Key.Left || e.Key == Key.Right ||
                     e.Key == Key.Home || e.Key == Key.End ||
@@ -584,21 +807,18 @@ namespace CBTM
                     return;
                 }
 
-                // Проверяем цифровые клавиши
                 if ((e.Key >= Key.D1 && e.Key <= Key.D9) ||
                     (e.Key >= Key.NumPad1 && e.Key <= Key.NumPad9))
                 {
-                    return; // Разрешаем цифры 1-9
+                    return;
                 }
 
-                // Блокируем ноль
                 if (e.Key == Key.D0 || e.Key == Key.NumPad0)
                 {
                     e.Handled = true;
                     return;
                 }
 
-                // Блокируем все остальные клавиши
                 e.Handled = true;
             }
 
@@ -626,7 +846,6 @@ namespace CBTM
                 PasswordChar = '*'
             };
 
-            // Подписываемся на события ограничения ввода для PasswordBox
             oldPasswordBox.PreviewKeyDown += PasswordBox_PreviewKeyDown;
             oldPasswordBox.PreviewTextInput += RestrictToDigits1To9;
             DataObject.AddPastingHandler(oldPasswordBox, RestrictPasteToDigits1To9);
@@ -640,7 +859,6 @@ namespace CBTM
                 Visibility = Visibility.Collapsed
             };
 
-            // Подписываемся на события ограничения ввода для TextBox
             oldPasswordPreviewTextBox.PreviewTextInput += RestrictToDigits1To9;
             oldPasswordPreviewTextBox.PreviewKeyDown += PasswordBox_PreviewKeyDown;
             DataObject.AddPastingHandler(oldPasswordPreviewTextBox, RestrictPasteToDigits1To9);
@@ -719,7 +937,6 @@ namespace CBTM
                 PasswordChar = '*'
             };
 
-            // Подписываемся на события ограничения ввода для PasswordBox
             newPasswordBox.PreviewKeyDown += PasswordBox_PreviewKeyDown;
             newPasswordBox.PreviewTextInput += RestrictToDigits1To9;
             DataObject.AddPastingHandler(newPasswordBox, RestrictPasteToDigits1To9);
@@ -733,7 +950,6 @@ namespace CBTM
                 Visibility = Visibility.Collapsed
             };
 
-            // Подписываемся на события ограничения ввода для TextBox
             newPasswordPreviewTextBox.PreviewTextInput += RestrictToDigits1To9;
             newPasswordPreviewTextBox.PreviewKeyDown += PasswordBox_PreviewKeyDown;
             DataObject.AddPastingHandler(newPasswordPreviewTextBox, RestrictPasteToDigits1To9);
@@ -810,24 +1026,23 @@ namespace CBTM
                 Property = Button.IsMouseOverProperty,
                 Value = true,
                 Setters =
-        {
-            new Setter(Button.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0, 120, 212))),
-            new Setter(Button.ForegroundProperty, Brushes.White)
-        }
+                {
+                    new Setter(Button.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0, 120, 212))),
+                    new Setter(Button.ForegroundProperty, Brushes.White)
+                }
             });
 
-            var nextButton = new Button { Content = "Сохранить", Style = buttonStyle };
+            var saveButton = new Button { Content = "Сохранить", Style = buttonStyle };
             var cancelButton = new Button { Content = "Отмена", Style = buttonStyle };
 
-            buttonStack.Children.Add(nextButton);
+            buttonStack.Children.Add(saveButton);
             buttonStack.Children.Add(cancelButton);
             Grid.SetRow(buttonStack, 3);
             grid.Children.Add(buttonStack);
 
             // --- Обработчик кнопки "Сохранить" ---
-            nextButton.Click += (s, e) =>
+            saveButton.Click += (s, e) =>
             {
-                // Дополнительная валидация пароля
                 bool IsValidPassword(string password)
                 {
                     if (string.IsNullOrEmpty(password)) return false;
@@ -842,7 +1057,6 @@ namespace CBTM
                     return true;
                 }
 
-                // Проверяем формат старого пароля
                 if (!IsValidPassword(oldPasswordBox.Password))
                 {
                     MessageBox.Show("Старый пароль должен содержать только цифры от 1 до 9.",
@@ -850,7 +1064,6 @@ namespace CBTM
                     return;
                 }
 
-                // Проверяем формат нового пароля
                 if (string.IsNullOrEmpty(newPasswordBox.Password))
                 {
                     MessageBox.Show("Новый пароль не может быть пустым.",
@@ -865,7 +1078,6 @@ namespace CBTM
                     return;
                 }
 
-                // Проверяем, совпадает ли старый пароль
                 if (oldPasswordBox.Password == Settings.CurrentPassword)
                 {
                     Settings.CurrentPassword = newPasswordBox.Password;
@@ -875,16 +1087,17 @@ namespace CBTM
                 }
                 else
                 {
-                    temp++;
+                    attempts++;
 
                     MessageBox.Show("Старый пароль неверен!",
-                        $"Количество попыток {3 - temp}",
+                        $"Количество попыток {3 - attempts}",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
 
-                    if (temp == 3)
+                    if (attempts == 3)
                     {
                         MessageBox.Show("Превышено количество попыток! Доступ заблокирован.",
                             "Блокировка", MessageBoxButton.OK, MessageBoxImage.Error);
+                        ShowLockoutDialog();
                         dialog.Close();
                     }
                 }
@@ -897,7 +1110,7 @@ namespace CBTM
             dialog.ShowDialog();
         }
 
-        public void ShowLockoutDialog()
+        private void ShowLockoutDialog()
         {
             var lockoutDialog = new Window
             {
@@ -935,9 +1148,8 @@ namespace CBTM
 
             lockoutDialog.Content = stack;
 
-            // Таймер обратного отсчёта
             var startTime = DateTime.Now;
-            var timer = new System.Windows.Threading.DispatcherTimer();
+            var timer = new DispatcherTimer();
             timer.Interval = TimeSpan.FromSeconds(1);
             timer.Tick += (s, e) =>
             {
@@ -953,88 +1165,37 @@ namespace CBTM
             };
             timer.Start();
 
-            // Запрещаем закрытие окна вручную
             lockoutDialog.Closing += (s, e) =>
             {
                 if ((DateTime.Now - startTime).TotalSeconds < 60)
                 {
-                    e.Cancel = true; // Отменяем закрытие
+                    e.Cancel = true;
                 }
             };
 
             lockoutDialog.ShowDialog();
         }
 
-        public void SaveSettings()
+        #endregion
+
+        #region Закрытие приложения
+
+        private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
-            Settings.InvertX = InvertXCheckbox.IsChecked == true;
-            Settings.InvertY = InvertYCheckbox.IsChecked == true;
-            Settings.Sensitivity = SensitivityTextBox.Text;
-            Settings.Brightness = BrightnessSlider.Value;
-            Settings.IsGradient = Gradient.IsChecked == true;
-            Settings.IsMonoColor = MonoColor.IsChecked == true;
-            Settings.GradientSpeed = SpeedG.Value;
-            Settings.ColorValue = ColorInputBox.Text;
-
-            Settings.M1Value = M1.Text;
-            Settings.M2Value = M2.Text;
-            Settings.M3Value = M3.Text;
-            Settings.M4Value = M4.Text;
-            Settings.M5Value = M5.Text;
-            Settings.M6Value = M6.Text;
-            Settings.M7Value = M7.Text;
-            Settings.M8Value = M8.Text;
-            Settings.M9Value = M9.Text;
-
-            if (Settings.IsMonoColor && !ValidateColorFormat(Settings.ColorValue))
+            try
             {
-                MessageBox.Show("Недопустимый формат цвета. Используйте формат: xxx.yyy.zzz (где xxx, yyy, zzz - числа от 000 до 255).",
-                                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            SendSettingsToArduino();
-        }
-
-        private void LoadAvailablePorts()
-        {
-            PortComboBox.Items.Clear();
-            PortComboBox.Items.Add("не выбран");
-
-            string[] ports = SerialPort.GetPortNames();
-            foreach (string port in ports)
-            {
-                PortComboBox.Items.Add(port);
-            }
-
-            if (!string.IsNullOrEmpty(Settings.SelectedPortName))
-            {
-                if (Array.Exists(ports, p => p == Settings.SelectedPortName))
+                if (Settings.SerialPort != null && Settings.SerialPort.IsOpen)
                 {
-                    PortComboBox.SelectedItem = Settings.SelectedPortName;
-                }
-                else
-                {
-                    Settings.SelectedPortName = "";
-                    Settings.SerialPort = null;
-                    PortComboBox.SelectedIndex = 0;
+                    Settings.SerialPort.Close();
+                    Debug.WriteLine("COM-порт закрыт при закрытии окна");
                 }
             }
-            else
+            catch (Exception ex)
             {
-                PortComboBox.SelectedIndex = 0;
+                Debug.WriteLine($"Ошибка при закрытии порта: {ex.Message}");
             }
         }
-        
-        //protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
-        //{
-        //    if (Settings.SerialPort.IsOpen)
-        //        Settings.SerialPort.Close();
-        //    base.OnClosing(e);
-        //}
+
+        #endregion
     }
-
-
-
-
 }

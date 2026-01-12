@@ -4,9 +4,10 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="CRM" Height="743" Width="500"
+        Title="CRM - Управление мышью" Height="743" Width="500"
         Background="Black" Foreground="Gray"
-        FontFamily="Segoe UI" FontSize="14">
+        FontFamily="Segoe UI" FontSize="14"
+        Closing="Window_Closing">
 
     <Window.Resources>
         <!-- Стиль для ComboBox -->
@@ -150,7 +151,6 @@
             <Setter Property="TickFrequency" Value="1"/>
             <Setter Property="AutoToolTipPlacement" Value="TopLeft"/>
             <Setter Property="Background" Value="#222"/>
-            <Setter Property="Foreground" Value="#222"/>
         </Style>
 
         <!-- Стиль для TextBox -->
@@ -164,16 +164,13 @@
 
         <!-- Стиль для RadioButton -->
         <Style TargetType="RadioButton">
-            <Setter Property="Background" Value="White"/>
             <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderBrush" Value="#555"/>
-            <Setter Property="Padding" Value="4"/>
             <Setter Property="Margin" Value="0,5"/>
         </Style>
 
         <!-- Стиль для обычных кнопок -->
         <Style TargetType="Button" x:Key="DefaultButtonStyle">
-            <Setter Property="Background" Value="Lavender"/>
+            <Setter Property="Background" Value="White"/>
             <Setter Property="Foreground" Value="Black"/>
             <Setter Property="Padding" Value="8,4"/>
             <Setter Property="Margin" Value="0,8"/>
@@ -186,7 +183,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="DarkGray"/>
+                                <Setter Property="Background" Value="#666"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -194,9 +191,9 @@
             </Setter>
         </Style>
 
-        <!-- Отдельный стиль для кнопок "Сохранить" и "Сбросить" -->
+        <!-- Стиль для кнопок действий -->
         <Style x:Key="ActionButtonsStyle" TargetType="Button">
-            <Setter Property="Background" Value="#333"/>
+            <Setter Property="Background" Value="#444"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="Padding" Value="12,6"/>
             <Setter Property="Margin" Value="5"/>
@@ -211,10 +208,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="Gray"/>
+                                <Setter Property="Background" Value="#666"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter Property="Background" Value="DarkGray"/>
+                                <Setter Property="Background" Value="#888"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -234,12 +231,20 @@
 
         <!-- Панель с кнопками внизу -->
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" 
-                    
                     HorizontalAlignment="Right" Margin="0,10,0,0">
 
-            <ComboBox x:Name="PortComboBox" Width="120" Style="{StaticResource CustomComboBoxStyle}" ItemContainerStyle="{StaticResource CustomComboBoxItemStyle}"  Height="24" />
-            <Button Content="Сохранить" x:Name="SaveButton" Style="{StaticResource ActionButtonsStyle}" />
-            <Button Content="Сбросить" x:Name="ResetButton" Style="{StaticResource ActionButtonsStyle}" />
+            <ComboBox x:Name="PortComboBox" Width="120" 
+                      Style="{StaticResource CustomComboBoxStyle}" 
+                      ItemContainerStyle="{StaticResource CustomComboBoxItemStyle}"  
+                      Height="24" />
+
+            <Button Content="Сбросить" x:Name="ResetButton" 
+                    Style="{StaticResource ActionButtonsStyle}" 
+                    ToolTip="Загрузить настройки с Arduino"/>
+
+            <Button Content="Сохранить" x:Name="SaveButton" 
+                    Style="{StaticResource ActionButtonsStyle}" 
+                    ToolTip="Сохранить настройки на Arduino"/>
 
         </StackPanel>
 
@@ -254,7 +259,8 @@
                         <CheckBox Content="Инверсия по Y" x:Name="InvertYCheckbox"/>
                         <StackPanel Orientation="Horizontal" Margin="0,5,0,5">
                             <Label Content="Сенсорная чувствительность:" Width="196"/>
-                            <TextBox x:Name="SensitivityTextBox" Text="1" Width="54" TextAlignment="Center"  PreviewTextInput="SensitivityTextBox_PreviewTextInput" />
+                            <TextBox x:Name="SensitivityTextBox" Text="1" Width="54" 
+                                     TextAlignment="Center" />
                         </StackPanel>
                     </StackPanel>
                 </Expander>
@@ -263,27 +269,43 @@
                 <Expander Header="Подсветка" IsExpanded="True">
                     <StackPanel Height="248">
                         <Label Content="Яркость:"/>
-                        <Slider x:Name="BrightnessSlider" Minimum="0" Maximum="100" Value="50" TickFrequency="1"/>
+                        <Slider x:Name="BrightnessSlider" Minimum="0" Maximum="100" 
+                                Value="50" TickFrequency="1"/>
+
                         <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <RadioButton GroupName="Languages" Name="Gradient" Content="Градиент" IsChecked="True" Width="112"/>
-                            <RadioButton GroupName="Languages" Name="MonoColor" Content="Моноцвет" IsChecked="False" Width="103"/>
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <Label Content="Цвет:" Width="60" IsEnabled="{Binding ElementName=MonoColor, Path=IsChecked}"/>
-                            <TextBox x:Name="ColorInputBox" Text="000.000.000" Width="114" TextAlignment="Center" IsEnabled="{Binding ElementName=MonoColor, Path=IsChecked}"  PreviewTextInput="ColorInputBox_PreviewTextInput"/>
+                            <RadioButton GroupName="LightMode" Name="Gradient" 
+                                        Content="Градиент" IsChecked="True" Width="112"/>
+                            <RadioButton GroupName="LightMode" Name="MonoColor" 
+                                        Content="Моноцвет" IsChecked="False" Width="103"/>
                         </StackPanel>
 
-                        <Label Content="Скорость изменения градиента:" IsEnabled="{Binding ElementName=Gradient, Path=IsChecked}"/>
-                        <Slider x:Name="SpeedG" Minimum="0" Maximum="100" Value="50" TickFrequency="1" IsEnabled="{Binding ElementName=Gradient, Path=IsChecked}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,5">
+                            <Label Content="Цвет:" Width="60" 
+                                   IsEnabled="{Binding ElementName=MonoColor, Path=IsChecked}"/>
+                            <TextBox x:Name="ColorInputBox" Text="000.000.000" Width="114" 
+                                     TextAlignment="Center" 
+                                     IsEnabled="{Binding ElementName=MonoColor, Path=IsChecked}"/>
+                        </StackPanel>
+
+                        <Label Content="Скорость изменения градиента:" 
+                               IsEnabled="{Binding ElementName=Gradient, Path=IsChecked}"/>
+                        <Slider x:Name="SpeedG" Minimum="0" Maximum="100" 
+                                Value="50" TickFrequency="1" 
+                                IsEnabled="{Binding ElementName=Gradient, Path=IsChecked}" />
                     </StackPanel>
                 </Expander>
 
                 <!-- Раздел 3: Клавиши -->
                 <Expander Header="Клавиши" IsExpanded="True">
                     <StackPanel>
-                        <Button Content="Изменить пароль" x:Name="ChangePasswordButton" HorizontalAlignment="Left" Style="{StaticResource DefaultButtonStyle}" />
+                        <Button Content="Изменить пароль" x:Name="ChangePasswordButton" 
+                                HorizontalAlignment="Left" 
+                                Style="{StaticResource DefaultButtonStyle}" 
+                                ToolTip="Изменить пароль для доступа к настройкам"/>
+
                         <Label Content="Настройка биндов клавиш:" Margin="0,15,0,5"/>
 
+                        <!-- Клавиши M1-M9 -->
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M1" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M1" Text="left click" Width="100" HorizontalAlignment="Left"/>
@@ -328,5 +350,4 @@
         </ScrollViewer>
 
     </DockPanel>
-
 </Window>
