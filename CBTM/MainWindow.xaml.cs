@@ -1,14 +1,15 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO.Ports;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using System.Linq;
 
 namespace CBTM
 {
@@ -64,6 +65,7 @@ namespace CBTM
 
         private MouseSettings Settings = new MouseSettings();
         private bool _isConnectionTesting = false;
+        private Window _instructionsWindow; // Добавляем поле для отслеживания окна инструкции
 
         public MainWindow()
         {
@@ -74,6 +76,8 @@ namespace CBTM
             ResetButton.Click += (sender, e) => RequestSettingsFromArduino();
             SaveButton.Click += (sender, e) => SaveSettings();
             ChangePasswordButton.Click += (sender, e) => OpenChangePasswordDialog();
+            // УБИРАЕМ эту строку, так как обработчик уже привязан в XAML:
+            // InstructionsButton.Click += InstructionsButton_Click;
 
             // Обработчики для полей ввода
             ColorInputBox.PreviewTextInput += ColorInputBox_PreviewTextInput;
@@ -1174,6 +1178,231 @@ namespace CBTM
             };
 
             lockoutDialog.ShowDialog();
+        }
+
+        #endregion
+
+        #region Инструкция
+
+        private void InstructionsButton_Click(object sender, RoutedEventArgs e)
+        {
+            // Проверяем, не открыто ли уже окно инструкции
+            if (_instructionsWindow != null && _instructionsWindow.IsLoaded)
+            {
+                // Если окно уже открыто, активируем его (переводим на передний план)
+                _instructionsWindow.Activate();
+                _instructionsWindow.Focus();
+                return;
+            }
+
+            // Создаем новое окно инструкции
+            _instructionsWindow = new Window
+            {
+                Title = "Инструкция по использованию приложения",
+                Width = 700, // Увеличена ширина окна
+                Height = 800, // Увеличена высота окна
+                ResizeMode = ResizeMode.CanResize,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                Background = new SolidColorBrush(Color.FromRgb(220, 220, 220)), // Серый фон окна
+                FontFamily = new FontFamily("Segoe UI"),
+                FontSize = 15, // Увеличен базовый шрифт
+                ShowInTaskbar = true,
+                Topmost = false
+            };
+
+            // Обработчик закрытия окна
+            _instructionsWindow.Closed += (s, args) =>
+            {
+                _instructionsWindow = null; // Сбрасываем ссылку при закрытии окна
+            };
+
+            var scrollViewer = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Background = new SolidColorBrush(Color.FromRgb(0, 0, 0)) // Светло-серый фон для скроллера
+            };
+
+            var stackPanel = new StackPanel
+            {
+                Margin = new Thickness(25) // Увеличен отступ
+            };
+
+            // Заголовок
+            var header = new TextBlock
+            {
+                Text = "📖 Инструкция по использованию приложения",
+                FontSize = 24, // Увеличен размер шрифта
+                FontWeight = FontWeights.Bold, // Более жирный шрифт
+                Foreground = Brushes.White, // Черный текст
+                Margin = new Thickness(0, 0, 0, 25),
+                TextWrapping = TextWrapping.Wrap,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                TextAlignment = TextAlignment.Center
+            };
+            stackPanel.Children.Add(header);
+
+            // Разделы инструкции
+            var sections = new[]
+            {
+        new {
+            Title = "🔌 Подключение к устройству",
+            Content = "1. Подключите устройство Arduino к компьютеру через USB\n" +
+                     "2. Выберите COM-порт из выпадающего списка\n" +
+                     "3. Приложение автоматически попытается подключиться к устройству\n" +
+                     "4. Убедитесь, что на Arduino загружена правильная прошивка"
+        },
+        new {
+            Title = "🖱️ Настройка курсора",
+            Content = "• Инверсия по X/Y - меняет направление движения курсора\n" +
+                     "• Сенсорная чувствительность - настройка скорости движения курсора (0-9999)\n" +
+                     "  - 0: максимально медленно\n" +
+                     "  - 9999: максимально быстро\n" +
+                     "  - Рекомендуемое значение: 1-100"
+        },
+        new {
+            Title = "💡 Настройка подсветки",
+            Content = "• Яркость - регулирует общую яркость подсветки (0-100%)\n" +
+                     "• Режим Градиент:\n" +
+                     "  - Плавная смена цветов радуги\n" +
+                     "  - Скорость изменения - скорость перехода между цветами\n" +
+                     "• Режим Моноцвет:\n" +
+                     "  - Статический цвет подсветки\n" +
+                     "  - Цвет задается в формате: RRR.GGG.BBB (0-255)\n" +
+                     "  - Пример: 255.000.000 - красный цвет"
+        },
+        new {
+            Title = "⌨️ Настройка клавиш (биндов)",
+            Content = "• M1-M9 - программируемые кнопки на устройстве\n" +
+                     "• Поддерживаемые команды:\n" +
+                     "  - 'left click', 'right click', 'middle click'\n" +
+                     "  - 'back', 'forward'\n" +
+                     "  - 'Volume Up', 'Volume Down', 'Mute'\n" +
+                     "  - 'Task View', 'Alt+F4', 'Ctrl+C', 'Ctrl+V'\n" +
+                     "  - Любые клавиши в формате 'KEY_A', 'KEY_ENTER' и т.д."
+        },
+        new {
+            Title = "🔒 Изменение пароля",
+            Content = "• Пароль защищает доступ к настройкам на устройстве\n" +
+                     "• Старый пароль: 1234 (по умолчанию)\n" +
+                     "• Новый пароль должен содержать только цифры 1-9\n" +
+                     "• После 3 неверных попыток доступ блокируется на 1 минуту"
+        },
+        new {
+            Title = "⚙️ Основные функции",
+            Content = "• Сбросить - загружает текущие настройки с устройства\n" +
+                     "• Сохранить - отправляет настройки на устройство\n" +
+                     "• Инструкция - открывает это окно справки\n" +
+                     "• При закрытии приложения соединение автоматически разрывается"
+        },
+        new {
+            Title = "⚠️ Частые проблемы и решения",
+            Content = "1. Устройство не определяется:\n" +
+                     "   - Проверьте USB-подключение\n" +
+                     "   - Перезагрузите устройство\n" +
+                     "   - Перезапустите приложение\n\n" +
+                     "2. Настройки не сохраняются:\n" +
+                     "   - Проверьте соединение\n" +
+                     "   - Убедитесь, что выбрана правильная скорость порта (9600)\n\n" +
+                     "3. Подсветка не работает:\n" +
+                     "   - Проверьте правильность формата цвета\n" +
+                     "   - Убедитесь, что яркость не установлена на 0"
+        },
+        new {
+            Title = "📞 Техническая поддержка",
+            Content = "Если у вас возникли проблемы:\n" +
+                     "1. Проверьте, что на устройстве установлена последняя версия прошивка\n" +
+                     "2. Убедитесь, что используются совместимые версии ПО\n" +
+                     "3. Для получения дополнительной помощи обратитесь к разработчику"
+        }
+    };
+
+            foreach (var section in sections)
+            {
+                // Фон для каждого раздела
+                var sectionContainer = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(245, 245, 245)), // Светло-серый фон раздела
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(200, 200, 200)), // Темно-серый бордюр
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(15),
+                    Margin = new Thickness(0, 0, 0, 15) // Отступ между разделами
+                };
+
+                var sectionContentPanel = new StackPanel();
+
+                // Заголовок раздела
+                var sectionTitle = new TextBlock
+                {
+                    Text = section.Title,
+                    FontSize = 18, // Увеличен размер шрифта
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = Brushes.Black, // Черный текст
+                    Margin = new Thickness(0, 0, 0, 12),
+                    TextWrapping = TextWrapping.Wrap
+                };
+                sectionContentPanel.Children.Add(sectionTitle);
+
+                // Содержимое раздела
+                var sectionContent = new TextBlock
+                {
+                    Text = section.Content,
+                    Foreground = Brushes.Black, // Черный текст
+                    Margin = new Thickness(0, 0, 0, 15),
+                    TextWrapping = TextWrapping.Wrap,
+                    LineHeight = 26, // Увеличен межстрочный интервал
+                    FontSize = 16 // Увеличен размер шрифта содержимого
+                };
+                sectionContentPanel.Children.Add(sectionContent);
+
+                // Добавляем изображение ms.png ТОЛЬКО для раздела "💡 Настройка подсветки"
+                if (section.Title.Contains("⌨️ Настройка клавиш (биндов)"))
+                {
+                    try
+                    {
+                        var msImage = new Image
+                        {
+                            Source = new BitmapImage(
+                                new Uri("pack://application:,,,/img/ms.png", UriKind.Absolute)),
+                            Width = 600, // Увеличен размер изображения
+                            Height = 400, // Увеличен размер изображения
+                            Margin = new Thickness(0, 10, 0, 5),
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            Stretch = Stretch.Uniform,
+                            Cursor = Cursors.Hand
+                        };
+
+                        // Добавляем всплывающую подсказку
+                        msImage.ToolTip = "Логотип Microsoft - пример настройки подсветки";
+
+                        sectionContentPanel.Children.Add(msImage);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Если изображение не найдено, добавляем текстовое сообщение
+                        var errorText = new TextBlock
+                        {
+                            Text = "[Изображение ms.png не найдено в папке img]",
+                            Foreground = Brushes.DarkRed,
+                            FontStyle = FontStyles.Italic,
+                            FontSize = 14,
+                            Margin = new Thickness(0, 10, 0, 5),
+                            HorizontalAlignment = HorizontalAlignment.Center
+                        };
+                        sectionContentPanel.Children.Add(errorText);
+                        Debug.WriteLine($"Ошибка загрузки изображения: {ex.Message}");
+                    }
+                }
+
+                sectionContainer.Child = sectionContentPanel;
+                stackPanel.Children.Add(sectionContainer);
+            }
+
+            scrollViewer.Content = stackPanel;
+            _instructionsWindow.Content = scrollViewer;
+
+            _instructionsWindow.Show();
         }
 
         #endregion

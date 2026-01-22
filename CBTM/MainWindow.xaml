@@ -224,6 +224,35 @@
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="Margin" Value="0,5"/>
         </Style>
+
+        <!-- Стиль для кнопки инструкции -->
+        <Style x:Key="HelpButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#444"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Margin" Value="5"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="MinWidth" Value="40"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#666"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Background" Value="#888"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <!-- Обертываем всё в DockPanel -->
@@ -245,6 +274,11 @@
             <Button Content="Сохранить" x:Name="SaveButton" 
                     Style="{StaticResource ActionButtonsStyle}" 
                     ToolTip="Сохранить настройки на Arduino"/>
+
+            <Button Content="?" x:Name="InstructionsButton" 
+                    Style="{StaticResource HelpButtonStyle}" 
+                    ToolTip="Показать инструкцию по использованию приложения"
+                    Click="InstructionsButton_Click"/>
 
         </StackPanel>
 
@@ -269,7 +303,7 @@
                 <Expander Header="Подсветка" IsExpanded="True">
                     <StackPanel Height="248">
                         <Label Content="Яркость:"/>
-                        <Slider x:Name="BrightnessSlider" Minimum="0" Maximum="100" 
+                        <Slider x:Name="BrightnessSlider" Minimum="1" Maximum="100" 
                                 Value="50" TickFrequency="1"/>
 
                         <StackPanel Orientation="Horizontal" Margin="0,5">
@@ -289,7 +323,7 @@
 
                         <Label Content="Скорость изменения градиента:" 
                                IsEnabled="{Binding ElementName=Gradient, Path=IsChecked}"/>
-                        <Slider x:Name="SpeedG" Minimum="0" Maximum="100" 
+                        <Slider x:Name="SpeedG" Minimum="1" Maximum="100" 
                                 Value="50" TickFrequency="1" 
                                 IsEnabled="{Binding ElementName=Gradient, Path=IsChecked}" />
                     </StackPanel>
