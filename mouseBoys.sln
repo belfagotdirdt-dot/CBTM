@@ -1,6 +1,6 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "mouseBoys", "mouseBoys\mouseBoys.csproj", "{2A1F6014-A798-4C04-9B6D-54EE79BE18F3}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CBTM", "CBTM\CBTM.csproj", "{2A1F6014-A798-4C04-9B6D-54EE79BE18F3}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

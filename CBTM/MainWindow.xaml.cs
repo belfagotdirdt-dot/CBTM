@@ -1,20 +1,28 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO.Ports;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace CBTM
 {
     public partial class MainWindow : Window
     {
+        private const int DongleBaudRate = 9600;
+        private const string DongleIdentifyResponse = "MOUSEBOYS_DONGLE";
+        private const int ProbeTimeoutMs = 2500;
+        private const int ProbeAttempts = 3;
+        private const int LeonardoBootDelayMs = 1700;
+        private const int AuthResponseTimeoutMs = 3500;
+
         public struct MouseSettings
         {
             public bool InvertX { get; set; }
@@ -34,1476 +42,1183 @@ namespace CBTM
             public string M7Value { get; set; }
             public string M8Value { get; set; }
             public string M9Value { get; set; }
-            public string CurrentPassword { get; set; }
-            public SerialPort SerialPort { get; set; }
             public string SelectedPortName { get; set; }
 
-            public MouseSettings()
+            public static MouseSettings CreateDefault()
             {
-                InvertX = false;
-                InvertY = false;
-                Sensitivity = "1";
-                Brightness = 50;
-                IsGradient = true;
-                IsMonoColor = false;
-                ColorValue = "000.000.000";
-                GradientSpeed = 50;
-                M1Value = "left click";
-                M2Value = "right click";
-                M3Value = "middle click";
-                M4Value = "back";
-                M5Value = "forward";
-                M6Value = "Volume Up";
-                M7Value = "Volume Down";
-                M8Value = "Mute";
-                M9Value = "Task View";
-                CurrentPassword = "1234";
-                SerialPort = null;
-                SelectedPortName = "";
+                return new MouseSettings
+                {
+                    InvertX = false,
+                    InvertY = false,
+                    Sensitivity = "1",
+                    Brightness = 50,
+                    IsGradient = true,
+                    IsMonoColor = false,
+                    ColorValue = "000.000.000",
+                    GradientSpeed = 50,
+                    M1Value = "left click",
+                    M2Value = "right click",
+                    M3Value = "middle click",
+                    M4Value = "back",
+                    M5Value = "forward",
+                    M6Value = "Volume Up",
+                    M7Value = "Volume Down",
+                    M8Value = "Mute",
+                    M9Value = "Task View",
+                    SelectedPortName = string.Empty
+                };
             }
         }
 
-        private MouseSettings Settings = new MouseSettings();
-        private bool _isConnectionTesting = false;
-        private Window _instructionsWindow; // Добавляем поле для отслеживания окна инструкции
+        private MouseSettings _settings = MouseSettings.CreateDefault();
+        private SerialPort? _serialPort;
+        private readonly StringBuilder _serialLineBuffer = new();
+        private DispatcherTimer? _portRefreshTimer;
+        private bool _isConnected;
+        private bool _isConnecting;
+        private bool _isUpdatingPortCombo;
+        private bool _isWaitingForSaveResponse;
+
+        private bool _isAuthenticated;
+        private Task<bool>? _authFlowTask;
+        private readonly object _awaitResponseLock = new();
+        private TaskCompletionSource<string>? _awaitResponseTcs;
+        private Func<string, bool>? _awaitResponseMatcher;
 
         public MainWindow()
         {
             InitializeComponent();
-            Debug.WriteLine("Инициализация главного окна");
+            SetupEventHandlers();
+            ApplySettingsToUI();
+            UpdateAuthUiState(false);
+            RefreshComPorts();
+            StartPortRefreshTimer();
+            _ = AutoConnectToDongleAsync();
+        }
 
-            // Привязка обработчиков событий
-            ResetButton.Click += (sender, e) => RequestSettingsFromArduino();
-            SaveButton.Click += (sender, e) => SaveSettings();
-            ChangePasswordButton.Click += (sender, e) => OpenChangePasswordDialog();
-            // УБИРАЕМ эту строку, так как обработчик уже привязан в XAML:
-            // InstructionsButton.Click += InstructionsButton_Click;
+        #region Init
 
-            // Обработчики для полей ввода
+        private void SetupEventHandlers()
+        {
+            SaveButton.Click += SaveButton_Click;
+            ResetButton.Click += ResetButton_Click;
+            ChangePasswordButton.Click += ChangePasswordButton_Click;
+
+            PortComboBox.SelectionChanged += PortComboBox_SelectionChanged;
+
             ColorInputBox.PreviewTextInput += ColorInputBox_PreviewTextInput;
-            SensitivityTextBox.PreviewKeyDown += SensitivityTextBox_PreviewKeyDown;
-            SensitivityTextBox.LostFocus += SensitivityTextBox_LostFocus;
-            DataObject.AddPastingHandler(SensitivityTextBox, SensitivityTextBox_PastingHandler);
-
-            // Загрузка доступных портов
-            LoadAvailablePorts();
-
-            // Обработчики для ComboBox портов
-            PortComboBox.SelectionChanged += (s, e) => SelectComPortFromComboBox();
-            PortComboBox.DropDownOpened += (s, e) => LoadAvailablePorts();
-
-            // Обработчики для переключателей подсветки
-            Gradient.Checked += (s, e) =>
-            {
-                SpeedG.Background = new SolidColorBrush(Color.FromRgb(34, 34, 34));
-                SpeedG.IsEnabled = true;
-                ColorInputBox.IsEnabled = false;
-            };
-
-            MonoColor.Checked += (s, e) =>
-            {
-                SpeedG.Background = new SolidColorBrush(Color.FromRgb(100, 100, 100));
-                SpeedG.IsEnabled = false;
-                ColorInputBox.IsEnabled = true;
-            };
-
-            // Инициализация состояния элементов
-            SpeedG.Background = new SolidColorBrush(Color.FromRgb(34, 34, 34));
-            SpeedG.IsEnabled = true;
-            ColorInputBox.IsEnabled = false;
+            ColorInputBox.LostFocus += ColorInputBox_LostFocus;
+            SensitivityTextBox.PreviewTextInput += SensitivityTextBox_PreviewTextInput;
         }
 
-        #region Серийная связь и подключение
-
-        private void LoadAvailablePorts()
+        private void StartPortRefreshTimer()
         {
-            try
+            _portRefreshTimer = new DispatcherTimer
             {
-                PortComboBox.Items.Clear();
-                PortComboBox.Items.Add("не выбран");
-
-                string[] ports = SerialPort.GetPortNames();
-                foreach (string port in ports)
-                {
-                    PortComboBox.Items.Add(port);
-                }
-
-                // Восстановление предыдущего выбора
-                if (!string.IsNullOrEmpty(Settings.SelectedPortName))
-                {
-                    if (Array.Exists(ports, p => p == Settings.SelectedPortName))
-                    {
-                        PortComboBox.SelectedItem = Settings.SelectedPortName;
-                    }
-                    else
-                    {
-                        Settings.SelectedPortName = "";
-                        Settings.SerialPort = null;
-                        PortComboBox.SelectedIndex = 0;
-                    }
-                }
-                else
-                {
-                    PortComboBox.SelectedIndex = 0;
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Ошибка загрузки портов: {ex.Message}");
-                MessageBox.Show($"Ошибка загрузки портов: {ex.Message}",
-                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+                Interval = TimeSpan.FromSeconds(2)
+            };
+            _portRefreshTimer.Tick += async (_, _) => await OnPortRefreshTickAsync();
+            _portRefreshTimer.Start();
         }
 
-        private void SelectComPortFromComboBox()
+        #endregion
+
+        #region COM
+
+        private static SerialPort CreateSerialPort(string portName)
         {
-            if (PortComboBox.SelectedItem == null ||
-                PortComboBox.SelectedItem.ToString() == "не выбран")
+            return new SerialPort
             {
-                if (Settings.SerialPort != null && Settings.SerialPort.IsOpen)
+                PortName = portName,
+                BaudRate = DongleBaudRate,
+                DataBits = 8,
+                Parity = Parity.None,
+                StopBits = StopBits.One,
+                ReadTimeout = 500,
+                WriteTimeout = 1000,
+                NewLine = "\n",
+                Encoding = Encoding.UTF8,
+                DtrEnable = true,
+                RtsEnable = true,
+                Handshake = Handshake.None
+            };
+        }
+
+        private void RefreshComPorts()
+        {
+            string? selected = PortComboBox.SelectedItem?.ToString();
+            string[] ports = SerialPort.GetPortNames().OrderBy(p => p).ToArray();
+
+            bool changed = ports.Length != PortComboBox.Items.Count;
+            if (!changed)
+            {
+                for (int i = 0; i < ports.Length; i++)
                 {
-                    try
+                    if (!string.Equals(PortComboBox.Items[i]?.ToString(), ports[i], StringComparison.OrdinalIgnoreCase))
                     {
-                        Settings.SerialPort.Close();
-                        Debug.WriteLine($"Порт {Settings.SerialPort.PortName} закрыт");
+                        changed = true;
+                        break;
                     }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"Ошибка закрытия порта: {ex.Message}");
-                    }
-                    Settings.SerialPort = null;
                 }
-                Settings.SelectedPortName = "";
-                return;
             }
 
-            string selectedPort = PortComboBox.SelectedItem.ToString();
+            if (!changed) return;
 
-            try
+            _isUpdatingPortCombo = true;
+            PortComboBox.Items.Clear();
+            foreach (string p in ports)
             {
-                // Закрываем предыдущее соединение
-                if (Settings.SerialPort != null && Settings.SerialPort.IsOpen)
-                {
-                    Settings.SerialPort.Close();
-                }
-
-                // Создаем новое подключение
-                Settings.SerialPort = new SerialPort(selectedPort, 9600)
-                {
-                    ReadTimeout = 3000,
-                    WriteTimeout = 3000,
-                    NewLine = "\n",
-                    Parity = Parity.None,
-                    DataBits = 8,
-                    StopBits = StopBits.One,
-                    Handshake = Handshake.None,
-                    Encoding = Encoding.ASCII
-                };
-
-                Settings.SerialPort.Open();
-
-                if (!Settings.SerialPort.IsOpen)
-                {
-                    MessageBox.Show($"Не удалось открыть порт {selectedPort}.", "Ошибка",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
-                    PortComboBox.SelectedIndex = 0;
-                    return;
-                }
-
-                Settings.SelectedPortName = selectedPort;
-
-                // Даем Arduino время на инициализацию
-                System.Threading.Thread.Sleep(2000);
-
-                // Очистка буферов
-                Settings.SerialPort.DiscardInBuffer();
-                Settings.SerialPort.DiscardOutBuffer();
-
-                // Проверяем соединение
-                if (TestArduinoConnection())
-                {
-                    MessageBox.Show($"Успешно подключено к {selectedPort}", "Подключение",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                else
-                {
-                    MessageBox.Show($"Подключено к {selectedPort}, но Arduino не отвечает.\nПроверьте код на Arduino.",
-                        "Внимание", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
+                PortComboBox.Items.Add(p);
             }
-            catch (UnauthorizedAccessException)
+
+            if (!string.IsNullOrWhiteSpace(_settings.SelectedPortName) && ports.Contains(_settings.SelectedPortName))
             {
-                MessageBox.Show($"Порт {selectedPort} занят другим приложением.", "Ошибка",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                PortComboBox.SelectedItem = _settings.SelectedPortName;
+            }
+            else if (!string.IsNullOrWhiteSpace(selected) && ports.Contains(selected))
+            {
+                PortComboBox.SelectedItem = selected;
+            }
+            else if (ports.Length > 0)
+            {
                 PortComboBox.SelectedIndex = 0;
             }
-            catch (Exception ex)
+            _isUpdatingPortCombo = false;
+
+            Log($"Порты: {(ports.Length == 0 ? "не найдены" : string.Join(", ", ports))}");
+        }
+
+        private async Task OnPortRefreshTickAsync()
+        {
+            RefreshComPorts();
+
+            if (_isConnected && _serialPort != null)
             {
-                MessageBox.Show($"Ошибка подключения к {selectedPort}: {ex.Message}",
-                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                PortComboBox.SelectedIndex = 0;
+                if (!SerialPort.GetPortNames().Contains(_serialPort.PortName))
+                {
+                    Log($"Порт {_serialPort.PortName} отключен", "WARNING");
+                    DisconnectFromPort();
+                }
+            }
+
+            if (!_isConnected)
+            {
+                await AutoConnectToDongleAsync();
             }
         }
 
-        private bool TestArduinoConnection()
+        private async Task<bool> AutoConnectToDongleAsync()
         {
-            if (_isConnectionTesting) return false;
-            _isConnectionTesting = true;
+            if (_isConnected || _isConnecting)
+            {
+                return _isConnected;
+            }
 
+            _isConnecting = true;
             try
             {
-                if (Settings.SerialPort == null || !Settings.SerialPort.IsOpen)
+                foreach (string port in GetCandidatePorts())
                 {
-                    Debug.WriteLine("Порт не открыт");
-                    return false;
+                    if (await IsDonglePortAsync(port))
+                    {
+                        return ConnectToPort(port);
+                    }
                 }
 
-                Debug.WriteLine("=== Тестирование связи с Arduino ===");
-
-                // Очистка буферов
-                Settings.SerialPort.DiscardInBuffer();
-                Settings.SerialPort.DiscardOutBuffer();
-                System.Threading.Thread.Sleep(100);
-
-                // Отправка команды PING
-                Settings.SerialPort.WriteLine("PING");
-                Debug.WriteLine("Отправлено: PING");
-
-                // Чтение ответа с таймаутом
-                string response = ReadSerialResponse(2000);
-
-                if (!string.IsNullOrEmpty(response) &&
-                    (response.Contains("PONG") || response.Contains("READY")))
-                {
-                    Debug.WriteLine("Связь подтверждена!");
-                    return true;
-                }
-
-                Debug.WriteLine("Таймаут ожидания ответа");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Ошибка тестирования связи: {ex.Message}");
+                UpdateStatusBar("Донгл не найден");
                 return false;
             }
             finally
             {
-                _isConnectionTesting = false;
+                _isConnecting = false;
             }
         }
 
-        private string ReadSerialResponse(int timeoutMs)
+        private IEnumerable<string> GetCandidatePorts()
         {
-            StringBuilder responseBuilder = new StringBuilder();
-            DateTime startTime = DateTime.Now;
+            string[] ports = SerialPort.GetPortNames().OrderBy(p => p).ToArray();
+            var ordered = new List<string>();
 
-            try
+            if (!string.IsNullOrWhiteSpace(_settings.SelectedPortName) && ports.Contains(_settings.SelectedPortName))
             {
-                Settings.SerialPort.ReadTimeout = timeoutMs;
+                ordered.Add(_settings.SelectedPortName);
+            }
 
-                while ((DateTime.Now - startTime).TotalMilliseconds < timeoutMs)
+            foreach (string port in ports)
+            {
+                if (!ordered.Contains(port))
                 {
-                    if (Settings.SerialPort.BytesToRead > 0)
-                    {
-                        try
-                        {
-                            string line = Settings.SerialPort.ReadLine().TrimEnd('\r', '\n');
-                            Debug.WriteLine($"Получено: '{line}'");
-
-                            if (!string.IsNullOrWhiteSpace(line))
-                            {
-                                // Если строка содержит настройки (есть запятые)
-                                if (line.Contains(",") && line.Length > 10)
-                                {
-                                    return line;
-                                }
-
-                                // Или это подтверждение
-                                if (line.Contains("OK") || line.Contains("PONG") ||
-                                    line.Contains("READY") || line.Contains("DEBUG"))
-                                {
-                                    return line;
-                                }
-
-                                responseBuilder.AppendLine(line);
-                            }
-                        }
-                        catch (TimeoutException) { }
-                        catch (Exception ex)
-                        {
-                            Debug.WriteLine($"Ошибка чтения строки: {ex.Message}");
-                        }
-                    }
-                    System.Threading.Thread.Sleep(50);
+                    ordered.Add(port);
                 }
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Ошибка в ReadSerialResponse: {ex.Message}");
-            }
 
-            return responseBuilder.Length > 0 ? responseBuilder.ToString().Trim() : null;
+            return ordered;
         }
 
-        #endregion
-
-        #region Работа с настройками
-
-        private void RequestSettingsFromArduino()
+        private static async Task<bool> IsDonglePortAsync(string portName)
         {
-            if (Settings.SerialPort == null || !Settings.SerialPort.IsOpen)
+            return await Task.Run(() =>
             {
-                MessageBox.Show("COM-порт не подключен.", "Ошибка",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            try
-            {
-                Debug.WriteLine("=== Запрос настроек ===");
-
-                // Очистка буферов
-                Settings.SerialPort.DiscardInBuffer();
-                Settings.SerialPort.DiscardOutBuffer();
-                System.Threading.Thread.Sleep(100);
-
-                // Отправка команды
-                Settings.SerialPort.WriteLine("GET_SETTINGS");
-                Debug.WriteLine("Отправлено: GET_SETTINGS");
-
-                // Чтение ответа
-                string response = ReadSerialResponse(3000);
-
-                if (!string.IsNullOrEmpty(response) && response.Contains(","))
-                {
-                    UpdateSettingsFromArduino(response);
-                }
-                else
-                {
-                    MessageBox.Show("Не удалось получить ответ от Arduino. Проверьте соединение.",
-                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка: {ex.Message}", "Ошибка",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private void UpdateSettingsFromArduino(string data)
-        {
-            try
-            {
-                Debug.WriteLine($"Обработка данных: {data}");
-                string[] parts = data.Split(',');
-
-                if (parts.Length >= 9)
-                {
-                    Settings.InvertX = parts[0] == "1";
-                    Settings.InvertY = parts[1] == "1";
-                    Settings.Sensitivity = parts[2];
-                    Settings.Brightness = double.Parse(parts[3]);
-                    Settings.IsGradient = parts[4] == "1";
-                    Settings.IsMonoColor = parts[5] == "1";
-                    Settings.ColorValue = parts[6];
-                    Settings.GradientSpeed = double.Parse(parts[7]);
-
-                    Dispatcher.Invoke(() =>
-                    {
-                        InvertXCheckbox.IsChecked = Settings.InvertX;
-                        InvertYCheckbox.IsChecked = Settings.InvertY;
-                        SensitivityTextBox.Text = Settings.Sensitivity;
-                        BrightnessSlider.Value = Settings.Brightness;
-                        Gradient.IsChecked = Settings.IsGradient;
-                        MonoColor.IsChecked = Settings.IsMonoColor;
-                        ColorInputBox.Text = Settings.ColorValue;
-                        SpeedG.Value = Settings.GradientSpeed;
-
-                        if (parts.Length > 8) { Settings.M1Value = parts[8]; M1.Text = parts[8]; }
-                        if (parts.Length > 9) { Settings.M2Value = parts[9]; M2.Text = parts[9]; }
-                        if (parts.Length > 10) { Settings.M3Value = parts[10]; M3.Text = parts[10]; }
-                        if (parts.Length > 11) { Settings.M4Value = parts[11]; M4.Text = parts[11]; }
-                        if (parts.Length > 12) { Settings.M5Value = parts[12]; M5.Text = parts[12]; }
-                        if (parts.Length > 13) { Settings.M6Value = parts[13]; M6.Text = parts[13]; }
-                        if (parts.Length > 14) { Settings.M7Value = parts[14]; M7.Text = parts[14]; }
-                        if (parts.Length > 15) { Settings.M8Value = parts[15]; M8.Text = parts[15]; }
-                        if (parts.Length > 16) { Settings.M9Value = parts[16]; M9.Text = parts[16]; }
-                        if (parts.Length > 17) { Settings.CurrentPassword = parts[17]; }
-                    });
-
-                    MessageBox.Show("Настройки успешно загружены с Arduino!", "Успех",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                else
-                {
-                    MessageBox.Show($"Неверный формат данных. Получено {parts.Length} полей, нужно минимум 9.",
-                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка обработки данных: {ex.Message}\n\nДанные: {data}",
-                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private void SendSettingsToArduino()
-        {
-            try
-            {
-                if (Settings.SerialPort == null || !Settings.SerialPort.IsOpen)
-                {
-                    MessageBox.Show("COM-порт не подключен.", "Ошибка",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                string data = BuildSettingsString();
-                Debug.WriteLine($"Отправка настроек: {data}");
-
-                Settings.SerialPort.WriteLine(data);
-
-                System.Threading.Thread.Sleep(200);
-                string response = ReadSerialResponse(2000);
-
-                if (!string.IsNullOrEmpty(response) && (response.Contains("OK") || response.Contains("DEBUG")))
-                {
-                    MessageBox.Show("Настройки успешно отправлены на Arduino!", "Успех",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                else
-                {
-                    MessageBox.Show("Настройки отправлены, но подтверждение не получено.",
-                        "Внимание", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка отправки: {ex.Message}", "Ошибка",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private string BuildSettingsString()
-        {
-            return $"{(Settings.InvertX ? "1" : "0")}," +
-                   $"{(Settings.InvertY ? "1" : "0")}," +
-                   $"{Settings.Sensitivity}," +
-                   $"{Settings.Brightness}," +
-                   $"{(Settings.IsGradient ? "1" : "0")}," +
-                   $"{(Settings.IsMonoColor ? "1" : "0")}," +
-                   $"{Settings.ColorValue}," +
-                   $"{Settings.GradientSpeed}," +
-                   $"{Settings.M1Value}," +
-                   $"{Settings.M2Value}," +
-                   $"{Settings.M3Value}," +
-                   $"{Settings.M4Value}," +
-                   $"{Settings.M5Value}," +
-                   $"{Settings.M6Value}," +
-                   $"{Settings.M7Value}," +
-                   $"{Settings.M8Value}," +
-                   $"{Settings.M9Value}," +
-                   $"{Settings.CurrentPassword}";
-        }
-
-        // ЕДИНСТВЕННЫЙ метод SaveSettings
-        private void SaveSettings()
-        {
-            // Собираем настройки с формы
-            Settings.InvertX = InvertXCheckbox.IsChecked == true;
-            Settings.InvertY = InvertYCheckbox.IsChecked == true;
-
-            // Обработка чувствительности - удаляем ведущие нули
-            string sensitivityText = SensitivityTextBox.Text.TrimStart('0');
-            if (string.IsNullOrEmpty(sensitivityText))
-            {
-                sensitivityText = "0";
-            }
-            Settings.Sensitivity = sensitivityText;
-
-            Settings.Brightness = BrightnessSlider.Value;
-            Settings.IsGradient = Gradient.IsChecked == true;
-            Settings.IsMonoColor = MonoColor.IsChecked == true;
-            Settings.GradientSpeed = SpeedG.Value;
-            Settings.ColorValue = ColorInputBox.Text;
-
-            Settings.M1Value = M1.Text;
-            Settings.M2Value = M2.Text;
-            Settings.M3Value = M3.Text;
-            Settings.M4Value = M4.Text;
-            Settings.M5Value = M5.Text;
-            Settings.M6Value = M6.Text;
-            Settings.M7Value = M7.Text;
-            Settings.M8Value = M8.Text;
-            Settings.M9Value = M9.Text;
-
-            // Валидация цвета
-            if (Settings.IsMonoColor && !ValidateColorFormat(Settings.ColorValue))
-            {
-                MessageBox.Show("Недопустимый формат цвета. Используйте формат: xxx.yyy.zzz (где xxx, yyy, zzz - числа от 000 до 255).",
-                                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            // Валидация чувствительности
-            if (!int.TryParse(Settings.Sensitivity, out int sens) || sens < 0)
-            {
-                MessageBox.Show("Чувствительность должна быть неотрицательным числом.",
-                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            if (sens > 9999)
-            {
-                MessageBox.Show("Чувствительность не должна превышать 9999.",
-                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            SendSettingsToArduino();
-        }
-
-        private bool ValidateColorFormat(string colorValue)
-        {
-            var colorPattern = @"^\d{3}[.,;]\d{3}[.,;]\d{3}$";
-            var regex = new Regex(colorPattern);
-            return regex.IsMatch(colorValue);
-        }
-
-        #endregion
-
-        #region Валидация ввода
-
-        private void SensitivityTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
-        {
-            TextBox textBox = (TextBox)sender;
-
-            // Разрешаем все управляющие клавиши
-            if (e.Key == Key.Back || e.Key == Key.Delete ||
-                e.Key == Key.Left || e.Key == Key.Right ||
-                e.Key == Key.Home || e.Key == Key.End ||
-                e.Key == Key.Tab || e.Key == Key.Enter ||
-                e.Key == Key.Escape)
-            {
-                return;
-            }
-
-            // Разрешаем цифры 0-9
-            if ((e.Key >= Key.D0 && e.Key <= Key.D9) ||
-                (e.Key >= Key.NumPad0 && e.Key <= Key.NumPad9))
-            {
-                // Проверяем максимальную длину
-                if (textBox.Text.Length >= 4)
-                {
-                    e.Handled = true;
-                    return;
-                }
-
-                // Если текст пустой и вводится 0 - блокируем
-                if (textBox.Text.Length == 0 &&
-                    (e.Key == Key.D0 || e.Key == Key.NumPad0))
-                {
-                    e.Handled = true;
-                    MessageBox.Show("Чувствительность не может начинаться с нуля.",
-                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                return; // Разрешаем ввод цифры
-            }
-
-            // Блокируем все остальные клавиши (буквы, символы и т.д.)
-            e.Handled = true;
-        }
-
-        private void SensitivityTextBox_LostFocus(object sender, RoutedEventArgs e)
-        {
-            if (string.IsNullOrWhiteSpace(SensitivityTextBox.Text))
-            {
-                SensitivityTextBox.Text = "1";
-                return;
-            }
-
-            // Удаляем ведущие нули
-            string cleanedText = SensitivityTextBox.Text.TrimStart('0');
-
-            // Если после удаления нулей ничего не осталось, ставим "0"
-            if (string.IsNullOrEmpty(cleanedText))
-            {
-                cleanedText = "0";
-            }
-
-            if (!int.TryParse(cleanedText, out int value) || value < 0)
-            {
-                MessageBox.Show("Чувствительность должна быть положительным числом или нулём",
-                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                SensitivityTextBox.Text = "1";
-            }
-            else if (value > 9999)
-            {
-                MessageBox.Show("Чувствительность не должна превышать 9999",
-                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                SensitivityTextBox.Text = "9999";
-            }
-            else
-            {
-                // Сохраняем очищенное значение
-                SensitivityTextBox.Text = cleanedText;
-            }
-        }
-
-        private void SensitivityTextBox_PastingHandler(object sender, DataObjectPastingEventArgs e)
-        {
-            if (e.DataObject.GetDataPresent(typeof(string)))
-            {
-                string pasteText = (string)e.DataObject.GetData(typeof(string));
-                TextBox textBox = (TextBox)sender;
-
-                // Удаляем пробелы и другие нецифровые символы
-                string cleanPaste = new string(pasteText.Where(char.IsDigit).ToArray());
-
-                // Если после очистки ничего не осталось, отменяем вставку
-                if (string.IsNullOrEmpty(cleanPaste))
-                {
-                    e.CancelCommand();
-                    MessageBox.Show("Вставляемый текст должен содержать цифры.",
-                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                // Проверяем, что если текст пустой, то вставляемый текст не начинается с "0"
-                if (textBox.Text.Length == 0 && cleanPaste.StartsWith("0"))
-                {
-                    e.CancelCommand();
-                    MessageBox.Show("Чувствительность не может начинаться с нуля.",
-                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                // Проверяем, что общая длина не превышает 4 символа
-                if (textBox.Text.Length + cleanPaste.Length > 4)
-                {
-                    e.CancelCommand();
-                    MessageBox.Show("Чувствительность не может превышать 4 цифры.",
-                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                // Если все проверки пройдены, заменяем вставляемый текст на очищенный
-                e.DataObject.SetData(typeof(string), cleanPaste);
-            }
-            else
-            {
-                e.CancelCommand();
-            }
-        }
-
-        public void ColorInputBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
-        {
-            TextBox textBox = (TextBox)sender;
-
-            if (textBox.Text.Length >= 11)
-            {
-                e.Handled = true;
-                return;
-            }
-
-            char inputChar = e.Text[e.Text.Length - 1];
-            if (!char.IsDigit(inputChar) && inputChar != '.' && inputChar != ',')
-            {
-                e.Handled = true;
-                return;
-            }
-        }
-
-        #endregion
-
-        #region Изменение пароля
-
-        private void OpenChangePasswordDialog()
-        {
-            int attempts = 0; // Счетчик попыток
-
-            var dialog = new Window
-            {
-                Title = "Изменение пароля",
-                Width = 400,
-                Height = 300,
-                ResizeMode = ResizeMode.NoResize,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this,
-                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                Foreground = Brushes.White
-            };
-
-            var grid = new Grid();
-            grid.Margin = new Thickness(20);
-
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-            // --- Заголовок ---
-            var headerText = new TextBlock
-            {
-                Text = "Изменение пароля",
-                FontSize = 18,
-                FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center,
-                Foreground = Brushes.White,
-                Margin = new Thickness(0, 0, 0, 20)
-            };
-            Grid.SetRow(headerText, 0);
-            grid.Children.Add(headerText);
-
-            // --- Функция ограничения ввода только цифрами 1-9 ---
-            void RestrictToDigits1To9(object sender, TextCompositionEventArgs e)
-            {
-                foreach (char c in e.Text)
-                {
-                    if (!char.IsDigit(c) || c == '0')
-                    {
-                        e.Handled = true;
-                        return;
-                    }
-                }
-            }
-
-            // --- Функция ограничения ввода при вставке текста ---
-            void RestrictPasteToDigits1To9(object sender, DataObjectPastingEventArgs e)
-            {
-                if (e.DataObject.GetDataPresent(typeof(string)))
-                {
-                    string pasteText = (string)e.DataObject.GetData(typeof(string));
-
-                    foreach (char c in pasteText)
-                    {
-                        if (!char.IsDigit(c) || c == '0')
-                        {
-                            e.CancelCommand();
-                            return;
-                        }
-                    }
-                }
-                else
-                {
-                    e.CancelCommand();
-                }
-            }
-
-            // --- Обработчик нажатия клавиш для PasswordBox ---
-            void PasswordBox_PreviewKeyDown(object sender, KeyEventArgs e)
-            {
-                if (e.Key == Key.Space)
-                {
-                    e.Handled = true;
-                    return;
-                }
-
-                if (e.Key == Key.Back || e.Key == Key.Delete ||
-                    e.Key == Key.Left || e.Key == Key.Right ||
-                    e.Key == Key.Home || e.Key == Key.End ||
-                    e.Key == Key.Tab || e.Key == Key.Enter)
-                {
-                    return;
-                }
-
-                if ((e.Key >= Key.D1 && e.Key <= Key.D9) ||
-                    (e.Key >= Key.NumPad1 && e.Key <= Key.NumPad9))
-                {
-                    return;
-                }
-
-                if (e.Key == Key.D0 || e.Key == Key.NumPad0)
-                {
-                    e.Handled = true;
-                    return;
-                }
-
-                e.Handled = true;
-            }
-
-            // --- Поле "Старый пароль" ---
-            var oldPasswordLabel = new Label
-            {
-                Content = "Старый пароль (только цифры 1-9)",
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Margin = new Thickness(0, 10, 0, 5),
-                Foreground = Brushes.White
-            };
-
-            var oldPasswordStack = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-
-            var oldPasswordBox = new PasswordBox
-            {
-                Width = 250,
-                Margin = new Thickness(0, 0, 0, 0),
-                Background = Brushes.White,
-                Foreground = Brushes.Black,
-                PasswordChar = '*'
-            };
-
-            oldPasswordBox.PreviewKeyDown += PasswordBox_PreviewKeyDown;
-            oldPasswordBox.PreviewTextInput += RestrictToDigits1To9;
-            DataObject.AddPastingHandler(oldPasswordBox, RestrictPasteToDigits1To9);
-
-            var oldPasswordPreviewTextBox = new TextBox
-            {
-                Width = 250,
-                Margin = new Thickness(0, 0, 0, 0),
-                Background = Brushes.White,
-                Foreground = Brushes.Black,
-                Visibility = Visibility.Collapsed
-            };
-
-            oldPasswordPreviewTextBox.PreviewTextInput += RestrictToDigits1To9;
-            oldPasswordPreviewTextBox.PreviewKeyDown += PasswordBox_PreviewKeyDown;
-            DataObject.AddPastingHandler(oldPasswordPreviewTextBox, RestrictPasteToDigits1To9);
-
-            var showOldButton = new Button
-            {
-                Content = "👁️",
-                Width = 30,
-                Height = 25,
-                Background = Brushes.Transparent,
-                Foreground = Brushes.White,
-                BorderBrush = Brushes.Gray,
-                Cursor = Cursors.Hand,
-                Padding = new Thickness(0),
-                Margin = new Thickness(5, 0, 0, 0)
-            };
-
-            showOldButton.MouseEnter += (s, e) => showOldButton.Background = new SolidColorBrush(Color.FromRgb(0, 120, 212));
-            showOldButton.MouseLeave += (s, e) => showOldButton.Background = Brushes.Transparent;
-
-            showOldButton.PreviewMouseDown += (s, e) =>
-            {
-                oldPasswordPreviewTextBox.Text = oldPasswordBox.Password;
-                oldPasswordBox.Visibility = Visibility.Collapsed;
-                oldPasswordPreviewTextBox.Visibility = Visibility.Visible;
-                oldPasswordPreviewTextBox.Focus();
-                oldPasswordPreviewTextBox.CaretIndex = oldPasswordPreviewTextBox.Text.Length;
-            };
-
-            showOldButton.PreviewMouseUp += (s, e) =>
-            {
-                oldPasswordBox.Password = oldPasswordPreviewTextBox.Text;
-                oldPasswordPreviewTextBox.Visibility = Visibility.Collapsed;
-                oldPasswordBox.Visibility = Visibility.Visible;
-                oldPasswordBox.Focus();
-            };
-
-            showOldButton.LostMouseCapture += (s, e) =>
-            {
-                oldPasswordBox.Password = oldPasswordPreviewTextBox.Text;
-                oldPasswordPreviewTextBox.Visibility = Visibility.Collapsed;
-                oldPasswordBox.Visibility = Visibility.Visible;
-            };
-
-            oldPasswordStack.Children.Add(oldPasswordBox);
-            oldPasswordStack.Children.Add(oldPasswordPreviewTextBox);
-            oldPasswordStack.Children.Add(showOldButton);
-
-            var oldPasswordContainer = new StackPanel();
-            oldPasswordContainer.Children.Add(oldPasswordLabel);
-            oldPasswordContainer.Children.Add(oldPasswordStack);
-            Grid.SetRow(oldPasswordContainer, 1);
-            grid.Children.Add(oldPasswordContainer);
-
-            // --- Поле "Новый пароль" ---
-            var newPasswordLabel = new Label
-            {
-                Content = "Новый пароль (только цифры 1-9)",
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Margin = new Thickness(0, 10, 0, 5),
-                Foreground = Brushes.White
-            };
-
-            var newPasswordStack = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-
-            var newPasswordBox = new PasswordBox
-            {
-                Width = 250,
-                Margin = new Thickness(0, 0, 0, 0),
-                Background = Brushes.White,
-                Foreground = Brushes.Black,
-                PasswordChar = '*'
-            };
-
-            newPasswordBox.PreviewKeyDown += PasswordBox_PreviewKeyDown;
-            newPasswordBox.PreviewTextInput += RestrictToDigits1To9;
-            DataObject.AddPastingHandler(newPasswordBox, RestrictPasteToDigits1To9);
-
-            var newPasswordPreviewTextBox = new TextBox
-            {
-                Width = 250,
-                Margin = new Thickness(0, 0, 0, 0),
-                Background = Brushes.White,
-                Foreground = Brushes.Black,
-                Visibility = Visibility.Collapsed
-            };
-
-            newPasswordPreviewTextBox.PreviewTextInput += RestrictToDigits1To9;
-            newPasswordPreviewTextBox.PreviewKeyDown += PasswordBox_PreviewKeyDown;
-            DataObject.AddPastingHandler(newPasswordPreviewTextBox, RestrictPasteToDigits1To9);
-
-            var showNewButton = new Button
-            {
-                Content = "👁️",
-                Width = 30,
-                Height = 25,
-                Background = Brushes.Transparent,
-                Foreground = Brushes.White,
-                BorderBrush = Brushes.Gray,
-                Cursor = Cursors.Hand,
-                Padding = new Thickness(0),
-                Margin = new Thickness(5, 0, 0, 0)
-            };
-
-            showNewButton.MouseEnter += (s, e) => showNewButton.Background = new SolidColorBrush(Color.FromRgb(0, 120, 212));
-            showNewButton.MouseLeave += (s, e) => showNewButton.Background = Brushes.Transparent;
-
-            showNewButton.PreviewMouseDown += (s, e) =>
-            {
-                newPasswordPreviewTextBox.Text = newPasswordBox.Password;
-                newPasswordBox.Visibility = Visibility.Collapsed;
-                newPasswordPreviewTextBox.Visibility = Visibility.Visible;
-                newPasswordPreviewTextBox.Focus();
-                newPasswordPreviewTextBox.CaretIndex = newPasswordPreviewTextBox.Text.Length;
-            };
-
-            showNewButton.PreviewMouseUp += (s, e) =>
-            {
-                newPasswordBox.Password = newPasswordPreviewTextBox.Text;
-                newPasswordPreviewTextBox.Visibility = Visibility.Collapsed;
-                newPasswordBox.Visibility = Visibility.Visible;
-                newPasswordBox.Focus();
-            };
-
-            showNewButton.LostMouseCapture += (s, e) =>
-            {
-                newPasswordBox.Password = newPasswordPreviewTextBox.Text;
-                newPasswordPreviewTextBox.Visibility = Visibility.Collapsed;
-                newPasswordBox.Visibility = Visibility.Visible;
-            };
-
-            newPasswordStack.Children.Add(newPasswordBox);
-            newPasswordStack.Children.Add(newPasswordPreviewTextBox);
-            newPasswordStack.Children.Add(showNewButton);
-
-            var newPasswordContainer = new StackPanel();
-            newPasswordContainer.Children.Add(newPasswordLabel);
-            newPasswordContainer.Children.Add(newPasswordStack);
-            Grid.SetRow(newPasswordContainer, 2);
-            grid.Children.Add(newPasswordContainer);
-
-            // --- Кнопки ---
-            var buttonStack = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(0, 10, 0, 0)
-            };
-
-            Style buttonStyle = new Style(typeof(Button));
-            buttonStyle.Setters.Add(new Setter(Button.BackgroundProperty, Brushes.White));
-            buttonStyle.Setters.Add(new Setter(Button.ForegroundProperty, Brushes.Black));
-            buttonStyle.Setters.Add(new Setter(Button.BorderBrushProperty, Brushes.Gray));
-            buttonStyle.Setters.Add(new Setter(Button.CursorProperty, Cursors.Hand));
-            buttonStyle.Setters.Add(new Setter(Button.PaddingProperty, new Thickness(12, 6, 12, 6)));
-            buttonStyle.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 30.0));
-            buttonStyle.Setters.Add(new Setter(FrameworkElement.MinWidthProperty, 80.0));
-
-            buttonStyle.Triggers.Add(new Trigger
-            {
-                Property = Button.IsMouseOverProperty,
-                Value = true,
-                Setters =
-                {
-                    new Setter(Button.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0, 120, 212))),
-                    new Setter(Button.ForegroundProperty, Brushes.White)
-                }
-            });
-
-            var saveButton = new Button { Content = "Сохранить", Style = buttonStyle };
-            var cancelButton = new Button { Content = "Отмена", Style = buttonStyle };
-
-            buttonStack.Children.Add(saveButton);
-            buttonStack.Children.Add(cancelButton);
-            Grid.SetRow(buttonStack, 3);
-            grid.Children.Add(buttonStack);
-
-            // --- Обработчик кнопки "Сохранить" ---
-            saveButton.Click += (s, e) =>
-            {
-                bool IsValidPassword(string password)
-                {
-                    if (string.IsNullOrEmpty(password)) return false;
-
-                    foreach (char c in password)
-                    {
-                        if (!char.IsDigit(c) || c == '0')
-                        {
-                            return false;
-                        }
-                    }
-                    return true;
-                }
-
-                if (!IsValidPassword(oldPasswordBox.Password))
-                {
-                    MessageBox.Show("Старый пароль должен содержать только цифры от 1 до 9.",
-                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                if (string.IsNullOrEmpty(newPasswordBox.Password))
-                {
-                    MessageBox.Show("Новый пароль не может быть пустым.",
-                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                if (!IsValidPassword(newPasswordBox.Password))
-                {
-                    MessageBox.Show("Новый пароль должен содержать только цифры от 1 до 9.",
-                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                if (oldPasswordBox.Password == Settings.CurrentPassword)
-                {
-                    Settings.CurrentPassword = newPasswordBox.Password;
-                    MessageBox.Show("Пароль успешно изменён!", "Успех",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
-                    dialog.Close();
-                }
-                else
-                {
-                    attempts++;
-
-                    MessageBox.Show("Старый пароль неверен!",
-                        $"Количество попыток {3 - attempts}",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
-
-                    if (attempts == 3)
-                    {
-                        MessageBox.Show("Превышено количество попыток! Доступ заблокирован.",
-                            "Блокировка", MessageBoxButton.OK, MessageBoxImage.Error);
-                        ShowLockoutDialog();
-                        dialog.Close();
-                    }
-                }
-            };
-
-            // --- Обработчик кнопки "Отмена" ---
-            cancelButton.Click += (s, e) => dialog.Close();
-
-            dialog.Content = grid;
-            dialog.ShowDialog();
-        }
-
-        private void ShowLockoutDialog()
-        {
-            var lockoutDialog = new Window
-            {
-                Title = "Приложение заблокировано",
-                Width = 350,
-                Height = 150,
-                ResizeMode = ResizeMode.NoResize,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this,
-                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                Foreground = Brushes.White
-            };
-
-            var textBlock = new TextBlock
-            {
-                Text = "Приложение заблокировано на 1 минуту.",
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 16,
-                Margin = new Thickness(10)
-            };
-
-            var countdownText = new TextBlock
-            {
-                Text = "60",
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 16,
-                Margin = new Thickness(10, 40, 10, 10)
-            };
-
-            var stack = new StackPanel();
-            stack.Children.Add(textBlock);
-            stack.Children.Add(countdownText);
-
-            lockoutDialog.Content = stack;
-
-            var startTime = DateTime.Now;
-            var timer = new DispatcherTimer();
-            timer.Interval = TimeSpan.FromSeconds(1);
-            timer.Tick += (s, e) =>
-            {
-                var elapsed = (DateTime.Now - startTime).TotalSeconds;
-                var remaining = Math.Max(0, 60 - (int)elapsed);
-                countdownText.Text = remaining.ToString();
-
-                if (remaining <= 0)
-                {
-                    timer.Stop();
-                    lockoutDialog.Close();
-                }
-            };
-            timer.Start();
-
-            lockoutDialog.Closing += (s, e) =>
-            {
-                if ((DateTime.Now - startTime).TotalSeconds < 60)
-                {
-                    e.Cancel = true;
-                }
-            };
-
-            lockoutDialog.ShowDialog();
-        }
-
-        #endregion
-
-        #region Инструкция
-
-        private void InstructionsButton_Click(object sender, RoutedEventArgs e)
-        {
-            // Проверяем, не открыто ли уже окно инструкции
-            if (_instructionsWindow != null && _instructionsWindow.IsLoaded)
-            {
-                // Если окно уже открыто, активируем его (переводим на передний план)
-                _instructionsWindow.Activate();
-                _instructionsWindow.Focus();
-                return;
-            }
-
-            // Создаем новое окно инструкции в темной теме
-            _instructionsWindow = new Window
-            {
-                Title = "Справка - CRM Управление мышью",
-                Width = 750,
-                Height = 850,
-                ResizeMode = ResizeMode.CanResize,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this,
-                Background = new SolidColorBrush(Color.FromRgb(0, 0, 0)), // Черный фон как в основном окне
-                Foreground = Brushes.White,
-                FontFamily = new FontFamily("Segoe UI"),
-                FontSize = 14,
-                ShowInTaskbar = false,
-                Topmost = false
-            };
-
-            // Обработчик закрытия окна
-            _instructionsWindow.Closed += (s, args) =>
-            {
-                _instructionsWindow = null; // Сбрасываем ссылку при закрытии окна
-            };
-
-            var scrollViewer = new ScrollViewer
-            {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Background = new SolidColorBrush(Color.FromRgb(0, 0, 0)) // Черный фон
-            };
-
-            var stackPanel = new StackPanel
-            {
-                Margin = new Thickness(20)
-            };
-
-            // Заголовок с иконкой
-            var header = new TextBlock
-            {
-                Text = "❓ Справка по использованию приложения",
-                FontSize = 22,
-                FontWeight = FontWeights.Bold,
-                Foreground = Brushes.White, // Белый цвет текста
-                Margin = new Thickness(0, 0, 0, 20),
-                TextWrapping = TextWrapping.Wrap,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                TextAlignment = TextAlignment.Center
-            };
-            stackPanel.Children.Add(header);
-
-            // Разделы инструкции с улучшенным описанием чувствительности
-            var sections = new[]
-            {
-        new {
-            Title = "🔌 Подключение устройства",
-            Content = "1. Подключите устройство Arduino к компьютеру через USB-кабель\n" +
-                     "2. Выберите COM-порт из выпадающего списка\n" +
-                     "3. Приложение автоматически подключится к устройству\n" +
-                     "4. При успешном подключении появится уведомление\n" +
-                     "5. Для обновления списка портов кликните на стрелку выпадающего списка"
-        },
-        new {
-            Title = "🖱️ Настройка курсора",
-            Content = "Инверсия по X/Y - меняет направление движения курсора:\n" +
-                     "  - По умолчанию: движение вправо → курсор вправо\n" +
-                     "  - С инверсией X: движение вправо → курсор влево\n" +
-                     "  - Полезно для левшей или специфических задач\n\n" +
-                     "Сенсорная чувствительность (DPI):\n" +
-                     "  - Измеряется в DPI (точек на дюйм)\n" +
-                     "  - Диапазон: от 1 до 9999 DPI\n" +
-                     "  - Что такое DPI:\n" +
-                     "    • 1 DPI: 1 пиксель курсора на 1 дюйм движения мыши\n" +
-                     "    • 800 DPI: 800 пикселей курсора на 1 дюйм движения мыши\n" +
-                     "    • 4000 DPI: 4000 пикселей курсора на 1 дюйм движения мыши\n\n" +
-                     "  - Рекомендации по настройке:\n" +
-                     "    • 400-800 DPI: Офисные задачи, веб-сёрфинг\n" +
-                     "    • 800-1600 DPI: Графические редакторы, проектирование\n" +
-                     "    • 1600-3200 DPI: Игры, требующие высокой точности\n" +
-                     "    • 4000+ DPI: Профессиональные киберспортивные игры\n\n" +
-                     "  - Формула расчета: расстояние_курсора = DPI × расстояние_мыши / 25.4\n" +
-                     "  - Пример: при 800 DPI и движении мыши на 2.54 см (1 дюйм) курсор пройдет 800 пикселей"
-        },
-        new {
-            Title = "💡 Управление подсветкой",
-            Content = "Яркость - общая яркость подсветки:\n" +
-                     "  - Диапазон: от 1% до 100%\n" +
-                     "  - 0%: подсветка выключена\n" +
-                     "  - 50%: средняя яркость\n" +
-                     "  - 100%: максимальная яркость\n\n" +
-                     "Режим Градиент:\n" +
-                     "  - Плавная циклическая смена цветов по спектру RGB\n" +
-                     "  - Скорость изменения: от медленного (1) до быстрого (100)\n" +
-                     "  - Цикл смены: красный → оранжевый → желтый → зеленый → голубой → синий → фиолетовый\n\n" +
-                     "Режим Моноцвет:\n" +
-                     "  - Статический цвет без изменений\n" +
-                     "  - Формат цвета: RRR.GGG.BBB (каждая компонента от 000 до 255)\n" +
-                     "  - Примеры цветов:\n" +
-                     "    • 255.000.000 - чистый красный\n" +
-                     "    • 000.255.000 - чистый зеленый\n" +
-                     "    • 000.000.255 - чистый синий\n" +
-                     "    • 255.255.255 - белый\n" +
-                     "    • 128.128.128 - серый\n" +
-                     "  - Цветовой модель RGB: смешение красного, зеленого и синего"
-        },
-        new {
-            Title = "⌨️ Программирование кнопок",
-            Content = "Дополнительные кнопки M1-M9:\n" +
-                     "  - M1-M3: основные дополнительные кнопки\n" +
-                     "  - M4-M6: боковые кнопки (если поддерживаются)\n" +
-                     "  - M7-M9: дополнительные функциональные кнопки\n\n" +
-                     "Поддерживаемые команды и действия:\n" +
-                     "  - Основные клики: 'left click', 'right click', 'middle click'\n" +
-                     "  - Навигация: 'back', 'forward', 'scroll up', 'scroll down'\n" +
-                     "  - Управление медиа: 'Volume Up', 'Volume Down', 'Mute', 'Play/Pause'\n" +
-                     "  - Системные команды: 'Task View', 'Alt+F4', 'Ctrl+Alt+Delete'\n" +
-                     "  - Горячие клавиши: 'Ctrl+C', 'Ctrl+V', 'Ctrl+Z', 'Ctrl+Y'\n" +
-                     "  - Отдельные клавиши: 'KEY_A', 'KEY_ENTER', 'KEY_ESC', 'KEY_SPACE'\n" +
-                     "  - Макросы: последовательности команд через точку с запятой\n\n" +
-                     "Формат макросов:\n" +
-                     "  - 'KEY_A;DELAY=100;KEY_B' - нажать A, подождать 100мс, нажать B\n" +
-                     "  - 'left click;DELAY=500;right click' - левый клик, задержка, правый клик"
-        },
-        new {
-            Title = "🔒 Безопасность и пароли",
-            Content = "Защита настроек паролем:\n" +
-                     "  - Пароль по умолчанию: 1234\n" +
-                     "  - Пароль должен содержать только цифры 1-9\n" +
-                     "  - Цифра 0 не допускается в пароле\n" +
-                     "  - Минимальная длина: 1 символ\n" +
-                     "  - Максимальная длина: ограничена только производительностью\n\n" +
-                     "Механизм блокировки:\n" +
-                     "  - После 3 неудачных попыток ввода пароля\n" +
-                     "  - Приложение блокируется на 60 секунд\n" +
-                     "  - Во время блокировки доступ к настройкам невозможен\n" +
-                     "  - Отсчет времени отображается в отдельном окне\n\n" +
-                     "Рекомендации по безопасности:\n" +
-                     "  - Регулярно меняйте пароль\n" +
-                     "  - Не используйте простые последовательности (1234, 1111)\n" +
-                     "  - Избегайте хранения пароля на видном месте"
-        },
-        new {
-            Title = "⚙️ Основные функции управления",
-            Content = "Кнопка 'Сбросить':\n" +
-                     "  - Загружает текущие настройки с устройства\n" +
-                     "  - Обновляет интерфейс полученными значениями\n" +
-                     "  - Используется для проверки текущей конфигурации\n\n" +
-                     "Кнопка 'Сохранить':\n" +
-                     "  - Отправляет все измененные настройки на устройство\n" +
-                     "  - Выполняет валидацию введенных данных\n" +
-                     "  - Требует активного подключения к устройству\n\n" +
-                     "Кнопка 'Изменить пароль':\n" +
-                     "  - Открывает диалог смены пароля\n" +
-                     "  - Требует ввода старого пароля для подтверждения\n" +
-                     "  - Валидирует новый пароль перед сохранением\n\n" +
-                     "Автоматическое сохранение:\n" +
-                     "  - Настройки сохраняются в энергонезависимой памяти Arduino\n" +
-                     "  - Сохраняются даже после отключения питания\n" +
-                     "  - Доступны при следующем подключении"
-        },
-        new {
-            Title = "⚠️ Решение проблем и неисправностей",
-            Content = "1. Устройство не определяется в списке портов:\n" +
-                     "   - Проверьте USB-подключение\n" +
-                     "   - Переподключите кабель в другой порт USB\n" +
-                     "   - Перезагрузите Arduino кнопкой RESET\n" +
-                     "   - Проверьте установлены ли драйверы CH340/CP2102\n\n" +
-                     "2. Ошибка подключения к выбранному порту:\n" +
-                     "   - Порт занят другим приложением (закройте его)\n" +
-                     "   - Недостаточно прав (запустите от администратора)\n" +
-                     "   - Неправильная скорость порта (должна быть 9600 бод)\n\n" +
-                     "3. Настройки не применяются к устройству:\n" +
-                     "   - Проверьте целостность USB-кабеля\n" +
-                     "   - Убедитесь, что на Arduino загружена правильная прошивка\n" +
-                     "   - Проверьте питание Arduino (должен гореть светодиод)\n\n" +
-                     "4. Подсветка не реагирует на настройки:\n" +
-                     "   - Проверьте правильность формата цвета (RRR.GGG.BBB)\n" +
-                     "   - Убедитесь, что яркость не установлена на 0\n" +
-                     "   - Проверьте подключение светодиодов на плате"
-        },
-        new {
-            Title = "📊 Технические характеристики",
-            Content = "Поддерживаемые устройства:\n" +
-                     "  - Arduino Uno R3 (основная платформа)\n" +
-                     "  - Arduino Nano (совместимо)\n" +
-                     "  - Arduino Mega 2560 (совместимо)\n\n" +
-                     "Параметры связи:\n" +
-                     "  - Скорость: 9600 бод\n" +
-                     "  - Формат: 8 бит данных, без контроля четности, 1 стоп-бит\n" +
-                     "  - Таймаут чтения/записи: 3000 мс\n\n" +
-                     "Системные требования:\n" +
-                     "  - ОС: Windows 10 / Windows 11\n" +
-                     "  .NET Framework: 4.8 или выше\n" +
-                     "  - Оперативная память: 50 МБ минимум\n" +
-                     "  - Свободный USB-порт 2.0/3.0\n\n" +
-                     "Форматы данных:\n" +
-                     "  - Протокол обмена: текстовый ASCII\n" +
-                     "  - Разделитель полей: запятая\n" +
-                     "  - Завершение строки: символ новой строки (\\n)\n" +
-                     "  - Кодировка: UTF-8"
-        }
-    };
-
-            foreach (var section in sections)
-            {
-                // Контейнер для раздела с темным фоном
-                var sectionContainer = new Border
-                {
-                    Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)), // Темно-серый фон
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(68, 68, 68)), // Серый бордюр
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(6),
-                    Padding = new Thickness(15),
-                    Margin = new Thickness(0, 0, 0, 15)
-                };
-
-                var sectionContentPanel = new StackPanel();
-
-                // Заголовок раздела - теперь тоже белый цвет
-                var sectionTitle = new TextBlock
-                {
-                    Text = section.Title,
-                    FontSize = 16,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = Brushes.White, // Белый цвет как у всего текста
-                    Margin = new Thickness(0, 0, 0, 10),
-                    TextWrapping = TextWrapping.Wrap
-                };
-                sectionContentPanel.Children.Add(sectionTitle);
-
-                // Содержимое раздела
-                var sectionContent = new TextBlock
-                {
-                    Text = section.Content,
-                    Foreground = Brushes.White, // Белый цвет текста
-                    Margin = new Thickness(0, 0, 0, 5),
-                    TextWrapping = TextWrapping.Wrap,
-                    LineHeight = 22,
-                    FontSize = 14
-                };
-                sectionContentPanel.Children.Add(sectionContent);
-
-                // Добавляем изображение ms.png ТОЛЬКО для раздела "⌨️ Программирование кнопок"
-                if (section.Title.Contains("⌨️ Программирование кнопок"))
+                for (int attempt = 1; attempt <= ProbeAttempts; attempt++)
                 {
                     try
                     {
-                        var msImage = new Image
+                        using SerialPort probe = CreateSerialPort(portName);
+                        probe.Open();
+
+                        // Leonardo обычно делает reset после открытия порта.
+                        Thread.Sleep(LeonardoBootDelayMs);
+
+                        probe.DiscardInBuffer();
+                        probe.DiscardOutBuffer();
+
+                        DateTime endAt = DateTime.UtcNow.AddMilliseconds(ProbeTimeoutMs);
+                        while (DateTime.UtcNow < endAt)
                         {
-                            Source = new BitmapImage(
-                                new Uri("pack://application:,,,/img/ms.png", UriKind.Absolute)),
-                            Width = 600,
-                            Height = 400,
-                            Margin = new Thickness(0, 10, 0, 5),
-                            HorizontalAlignment = HorizontalAlignment.Center,
-                            Stretch = Stretch.Uniform,
-                            Cursor = Cursors.Hand
-                        };
+                            probe.WriteLine("IDENTIFY");
 
-                        // Добавляем всплывающую подсказку
-                        msImage.ToolTip = "Пример конфигурации программируемых кнопок мыши";
+                            DateTime readUntil = DateTime.UtcNow.AddMilliseconds(450);
+                            while (DateTime.UtcNow < readUntil)
+                            {
+                                try
+                                {
+                                    string line = probe.ReadLine().Trim();
+                                    if (line.Equals(DongleIdentifyResponse, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        return true;
+                                    }
+                                }
+                                catch (TimeoutException)
+                                {
+                                    break;
+                                }
+                            }
 
-                        sectionContentPanel.Children.Add(msImage);
+                            Thread.Sleep(120);
+                        }
                     }
-                    catch (Exception ex)
+                    catch
                     {
-                        // Если изображение не найдено, добавляем текстовое сообщение
-                        var errorText = new TextBlock
-                        {
-                            Text = "[Изображение ms.png не найдено в папке img]",
-                            Foreground = Brushes.OrangeRed,
-                            FontStyle = FontStyles.Italic,
-                            FontSize = 14,
-                            Margin = new Thickness(0, 10, 0, 5),
-                            HorizontalAlignment = HorizontalAlignment.Center
-                        };
-                        sectionContentPanel.Children.Add(errorText);
-                        Debug.WriteLine($"Ошибка загрузки изображения: {ex.Message}");
+                        // Порт может быть временно занят/перезапускаться.
                     }
+
+                    Thread.Sleep(220);
                 }
 
-                sectionContainer.Child = sectionContentPanel;
-                stackPanel.Children.Add(sectionContainer);
-            }
-
-            scrollViewer.Content = stackPanel;
-            _instructionsWindow.Content = scrollViewer;
-
-            _instructionsWindow.Show();
+                return false;
+            });
         }
 
-        #endregion
+        private bool ConnectToPort(string portName)
+        {
+            DisconnectFromPort();
 
-        #region Закрытие приложения
+            try
+            {
+                _serialPort = CreateSerialPort(portName);
+                _serialPort.DataReceived += SerialPort_DataReceived;
+                _serialPort.Open();
 
-        private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+                _isConnected = true;
+                _settings.SelectedPortName = portName;
+                _isAuthenticated = false;
+                UpdateAuthUiState(false);
+
+                _isUpdatingPortCombo = true;
+                PortComboBox.SelectedItem = portName;
+                _isUpdatingPortCombo = false;
+
+                lock (_serialLineBuffer)
+                {
+                    _serialLineBuffer.Clear();
+                }
+
+                Log($"Подключено к {portName}", "SUCCESS");
+                UpdateStatusBar($"Подключено к {portName}, требуется пароль");
+
+                _ = EnsureAuthenticatedAsync(showUi: true);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _isConnected = false;
+                _isAuthenticated = false;
+                UpdateAuthUiState(false);
+                Log($"Ошибка подключения к {portName}: {ex.Message}", "ERROR");
+                UpdateStatusBar("Ошибка подключения");
+                return false;
+            }
+        }
+
+        private void DisconnectFromPort()
         {
             try
             {
-                if (Settings.SerialPort != null && Settings.SerialPort.IsOpen)
+                if (_serialPort != null)
                 {
-                    Settings.SerialPort.Close();
-                    Debug.WriteLine("COM-порт закрыт при закрытии окна");
+                    _serialPort.DataReceived -= SerialPort_DataReceived;
+                    if (_serialPort.IsOpen)
+                    {
+                        string previousPort = _serialPort.PortName;
+                        _serialPort.Close();
+                        Log($"Отключено от {previousPort}");
+                    }
+
+                    _serialPort.Dispose();
+                    _serialPort = null;
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Ошибка при закрытии порта: {ex.Message}");
+                Log($"Ошибка отключения: {ex.Message}", "ERROR");
+            }
+            finally
+            {
+                _isConnected = false;
+                _isAuthenticated = false;
+                _isWaitingForSaveResponse = false;
+                _authFlowTask = null;
+                lock (_awaitResponseLock)
+                {
+                    _awaitResponseMatcher = null;
+                    _awaitResponseTcs?.TrySetCanceled();
+                    _awaitResponseTcs = null;
+                }
+                UpdateAuthUiState(false);
+                UpdateStatusBar("Отключено");
             }
         }
 
+        private void SerialPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
+        {
+            try
+            {
+                if (_serialPort == null || !_serialPort.IsOpen)
+                {
+                    return;
+                }
+
+                string incoming = _serialPort.ReadExisting();
+                if (string.IsNullOrEmpty(incoming))
+                {
+                    return;
+                }
+
+                List<string> completeLines = new();
+                lock (_serialLineBuffer)
+                {
+                    _serialLineBuffer.Append(incoming);
+                    string buffered = _serialLineBuffer.ToString();
+                    string[] split = buffered.Split('\n');
+
+                    for (int i = 0; i < split.Length - 1; i++)
+                    {
+                        string line = split[i].Trim('\r', ' ', '\t');
+                        if (!string.IsNullOrWhiteSpace(line))
+                        {
+                            completeLines.Add(line);
+                        }
+                    }
+
+                    _serialLineBuffer.Clear();
+                    _serialLineBuffer.Append(split[^1]);
+                }
+
+                foreach (string line in completeLines)
+                {
+                    Dispatcher.Invoke(() => ProcessReceivedData(line));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка приема данных: {ex.Message}", "ERROR");
+            }
+        }
+
+        private void ProcessReceivedData(string data)
+        {
+            Log($"<- {data}", "RX");
+            TryCompleteAwaitedResponse(data);
+
+            if (data.StartsWith("SERIAL_IN:", StringComparison.Ordinal) ||
+                data.StartsWith("RADIO:", StringComparison.Ordinal))
+            {
+                // Это диагностический трафик: уже показан в логе RX, дополнительная обработка не нужна.
+                return;
+            }
+
+            if (data == DongleIdentifyResponse)
+            {
+                UpdateStatusBar($"Подключено к {_settings.SelectedPortName}");
+                return;
+            }
+
+            if (data == "AUTH_REQUIRED")
+            {
+                _isAuthenticated = false;
+                UpdateAuthUiState(false);
+                UpdateStatusBar("Требуется ввод пароля");
+                return;
+            }
+
+            if (data == "NO_PASSWORD")
+            {
+                _isAuthenticated = false;
+                UpdateAuthUiState(false);
+                UpdateStatusBar("Пароль не установлен");
+                return;
+            }
+
+            if (data == "AUTH_OK")
+            {
+                _isAuthenticated = true;
+                UpdateAuthUiState(true);
+                UpdateStatusBar("Авторизация успешна");
+                return;
+            }
+
+            if (data == "AUTH_FAILED")
+            {
+                _isAuthenticated = false;
+                UpdateAuthUiState(false);
+                UpdateStatusBar("Неверная комбинация");
+                return;
+            }
+
+            if (data == "PASSWORD_CHANGED")
+            {
+                _isAuthenticated = true;
+                UpdateAuthUiState(true);
+                UpdateStatusBar("Пароль обновлен");
+                return;
+            }
+
+            if (data.StartsWith("SETTINGS:", StringComparison.Ordinal))
+            {
+                if (!_isAuthenticated)
+                {
+                    Log("SETTINGS проигнорированы до авторизации", "WARNING");
+                    return;
+                }
+
+                if (TryParseSettings(data.Substring(9), out MouseSettings parsed))
+                {
+                    parsed.SelectedPortName = _settings.SelectedPortName;
+                    _settings = parsed;
+                    ApplySettingsToUI();
+                    UpdateStatusBar("Настройки загружены с донгла");
+                    Log("Настройки загружены", "SUCCESS");
+                }
+                else
+                {
+                    Log("Некорректный формат SETTINGS", "WARNING");
+                    UpdateStatusBar("Ошибка чтения настроек");
+                }
+
+                return;
+            }
+
+            if (data == "OK")
+            {
+                _isWaitingForSaveResponse = false;
+                UpdateStatusBar("Настройки отправлены на донгл");
+                Log("Настройки применены донглом", "SUCCESS");
+                return;
+            }
+
+            if (data.StartsWith("ERROR", StringComparison.Ordinal))
+            {
+                _isWaitingForSaveResponse = false;
+                UpdateStatusBar("Ошибка от донгла");
+                Log($"Донгл вернул ошибку: {data}", "ERROR");
+                MessageBox.Show($"Донгл вернул ошибку: {data}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (data == "PONG")
+            {
+                return;
+            }
+
+            Log($"Необработанный ответ: {data}", "INFO");
+        }
+
+        private void SendCommand(string command, bool showErrors = true)
+        {
+            if (_serialPort == null || !_serialPort.IsOpen || !_isConnected)
+            {
+                if (showErrors)
+                {
+                    MessageBox.Show("Донгл не подключен", "Нет соединения", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+
+                return;
+            }
+
+            try
+            {
+                _serialPort.WriteLine(command);
+                Log($"-> {command}", "TX");
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка отправки: {ex.Message}", "ERROR");
+                if (showErrors)
+                {
+                    MessageBox.Show($"Ошибка отправки команды:\n{ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+        }
+
+        private async void PortComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isUpdatingPortCombo)
+            {
+                return;
+            }
+
+            string? selected = PortComboBox.SelectedItem?.ToString();
+            if (string.IsNullOrWhiteSpace(selected))
+            {
+                return;
+            }
+
+            if (_isConnected && _serialPort?.PortName == selected)
+            {
+                return;
+            }
+
+            bool isDongle = await IsDonglePortAsync(selected);
+            if (!isDongle)
+            {
+                // Повторная проверка снижает ложные срабатывания после hot-plug/reset.
+                await Task.Delay(300);
+                isDongle = await IsDonglePortAsync(selected);
+            }
+
+            if (isDongle)
+            {
+                ConnectToPort(selected);
+            }
+            else
+            {
+                Log($"{selected} не ответил как донгл (проверь прошивку и скорость 9600)", "WARNING");
+            }
+        }
+
+        private async Task<bool> EnsureDongleConnectionAsync()
+        {
+            if (_isConnected && _serialPort != null && _serialPort.IsOpen)
+            {
+                return true;
+            }
+
+            string? selected = PortComboBox.SelectedItem?.ToString();
+            if (!string.IsNullOrWhiteSpace(selected) && await IsDonglePortAsync(selected))
+            {
+                return ConnectToPort(selected);
+            }
+
+            if (await AutoConnectToDongleAsync())
+            {
+                return true;
+            }
+
+            MessageBox.Show(
+                "Не удалось найти донгл. Подключите Arduino Leonardo и попробуйте снова.",
+                "Донгл не найден",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return false;
+        }
+
+        private void UpdateAuthUiState(bool authenticated)
+        {
+            _isAuthenticated = authenticated;
+            bool enabled = authenticated;
+
+            if (SaveButton != null) SaveButton.IsEnabled = enabled;
+            if (ResetButton != null) ResetButton.IsEnabled = enabled;
+
+            if (InvertXCheckbox != null) InvertXCheckbox.IsEnabled = enabled;
+            if (InvertYCheckbox != null) InvertYCheckbox.IsEnabled = enabled;
+            if (SensitivityTextBox != null) SensitivityTextBox.IsEnabled = enabled;
+            if (BrightnessSlider != null) BrightnessSlider.IsEnabled = enabled;
+            if (Gradient != null) Gradient.IsEnabled = enabled;
+            if (MonoColor != null) MonoColor.IsEnabled = enabled;
+            if (ColorInputBox != null) ColorInputBox.IsEnabled = enabled;
+            if (SpeedG != null) SpeedG.IsEnabled = enabled;
+            if (M1 != null) M1.IsEnabled = enabled;
+            if (M2 != null) M2.IsEnabled = enabled;
+            if (M3 != null) M3.IsEnabled = enabled;
+            if (M4 != null) M4.IsEnabled = enabled;
+            if (M5 != null) M5.IsEnabled = enabled;
+            if (M6 != null) M6.IsEnabled = enabled;
+            if (M7 != null) M7.IsEnabled = enabled;
+            if (M8 != null) M8.IsEnabled = enabled;
+            if (M9 != null) M9.IsEnabled = enabled;
+        }
+
+        private static bool IsValidPasswordCombo(string? combo)
+        {
+            if (string.IsNullOrWhiteSpace(combo))
+            {
+                return false;
+            }
+
+            return Regex.IsMatch(combo, "^[123]{1,16}$");
+        }
+
+        private async Task<string?> SendCommandAndAwaitAsync(string command, Func<string, bool> matcher, int timeoutMs = AuthResponseTimeoutMs)
+        {
+            if (_serialPort == null || !_serialPort.IsOpen || !_isConnected)
+            {
+                return null;
+            }
+
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            lock (_awaitResponseLock)
+            {
+                _awaitResponseMatcher = matcher;
+                _awaitResponseTcs = tcs;
+            }
+
+            SendCommand(command);
+
+            Task done = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
+            if (done == tcs.Task)
+            {
+                return await tcs.Task;
+            }
+
+            lock (_awaitResponseLock)
+            {
+                if (ReferenceEquals(_awaitResponseTcs, tcs))
+                {
+                    _awaitResponseMatcher = null;
+                    _awaitResponseTcs = null;
+                }
+            }
+
+            return null;
+        }
+
+        private void TryCompleteAwaitedResponse(string data)
+        {
+            TaskCompletionSource<string>? tcs = null;
+            lock (_awaitResponseLock)
+            {
+                if (_awaitResponseMatcher != null && _awaitResponseMatcher(data))
+                {
+                    tcs = _awaitResponseTcs;
+                    _awaitResponseMatcher = null;
+                    _awaitResponseTcs = null;
+                }
+            }
+
+            tcs?.TrySetResult(data);
+        }
+
+        private async Task<bool> EnsureAuthenticatedAsync(bool showUi)
+        {
+            if (!_isConnected || _serialPort == null || !_serialPort.IsOpen)
+            {
+                return false;
+            }
+
+            if (_isAuthenticated)
+            {
+                return true;
+            }
+
+            if (_authFlowTask != null)
+            {
+                return await _authFlowTask;
+            }
+
+            _authFlowTask = EnsureAuthenticatedCoreAsync(showUi);
+            try
+            {
+                return await _authFlowTask;
+            }
+            finally
+            {
+                _authFlowTask = null;
+            }
+        }
+
+        private async Task<bool> EnsureAuthenticatedCoreAsync(bool showUi)
+        {
+            UpdateAuthUiState(false);
+            UpdateStatusBar("Проверка авторизации...");
+
+            string? state = await SendCommandAndAwaitAsync(
+                "GET_AUTH_STATE",
+                s => s == "AUTH_REQUIRED" || s == "NO_PASSWORD" || s == "AUTH_OK");
+
+            if (string.IsNullOrWhiteSpace(state))
+            {
+                UpdateStatusBar("Донгл не ответил на проверку пароля");
+                if (showUi)
+                {
+                    MessageBox.Show("Донгл не ответил на запрос авторизации.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                return false;
+            }
+
+            if (state == "AUTH_OK")
+            {
+                UpdateAuthUiState(true);
+                SendCommand("GET_SETTINGS", showErrors: false);
+                return true;
+            }
+
+            if (!showUi)
+            {
+                return false;
+            }
+
+            if (state == "NO_PASSWORD")
+            {
+                while (_isConnected)
+                {
+                    PasswordComboDialog createDialog = new PasswordComboDialog(
+                        "Установка пароля",
+                        "На донгле нет пароля.\nВведите комбинацию (только цифры 1/2/3):",
+                        "Установить");
+
+                    if (createDialog.ShowDialog() != true)
+                    {
+                        return false;
+                    }
+
+                    string combo = createDialog.PasswordCombo;
+                    if (!IsValidPasswordCombo(combo))
+                    {
+                        MessageBox.Show("Неверный формат. Используйте только цифры 1, 2, 3.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        continue;
+                    }
+
+                    string? resp = await SendCommandAndAwaitAsync(
+                        $"SET_PASSWORD:{combo}",
+                        s => s == "PASSWORD_CHANGED" || s.StartsWith("ERROR", StringComparison.Ordinal));
+
+                    if (resp == "PASSWORD_CHANGED")
+                    {
+                        UpdateAuthUiState(true);
+                        SendCommand("GET_SETTINGS", showErrors: false);
+                        MessageBox.Show("Пароль установлен.", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
+                        return true;
+                    }
+
+                    MessageBox.Show($"Не удалось установить пароль: {resp ?? "таймаут"}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+
+                return false;
+            }
+
+            while (_isConnected)
+            {
+                PasswordComboDialog authDialog = new PasswordComboDialog(
+                    "Авторизация",
+                    "Введите пароль-комбинацию кнопок (цифры 1/2/3):",
+                    "Войти");
+
+                if (authDialog.ShowDialog() != true)
+                {
+                    return false;
+                }
+
+                string combo = authDialog.PasswordCombo;
+                if (!IsValidPasswordCombo(combo))
+                {
+                    MessageBox.Show("Неверный формат. Используйте только цифры 1, 2, 3.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    continue;
+                }
+
+                string? authResp = await SendCommandAndAwaitAsync(
+                    $"AUTH:{combo}",
+                    s => s == "AUTH_OK" || s == "AUTH_FAILED" || s.StartsWith("ERROR", StringComparison.Ordinal));
+
+                if (authResp == "AUTH_OK")
+                {
+                    UpdateAuthUiState(true);
+                    SendCommand("GET_SETTINGS", showErrors: false);
+                    return true;
+                }
+
+                MessageBox.Show("Неверная комбинация. Попробуйте снова.", "Авторизация", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+
+            return false;
+        }
+
         #endregion
+
+        #region Settings serialization
+
+        private void CollectSettingsFromUI()
+        {
+            _settings.InvertX = InvertXCheckbox.IsChecked ?? false;
+            _settings.InvertY = InvertYCheckbox.IsChecked ?? false;
+            _settings.Sensitivity = string.IsNullOrWhiteSpace(SensitivityTextBox.Text) ? "1" : SensitivityTextBox.Text.Trim();
+            _settings.Brightness = BrightnessSlider.Value;
+            _settings.IsGradient = Gradient.IsChecked ?? true;
+            _settings.IsMonoColor = MonoColor.IsChecked ?? false;
+            _settings.ColorValue = NormalizeColor(ColorInputBox.Text);
+            _settings.GradientSpeed = SpeedG.Value;
+            _settings.M1Value = SanitizeButtonText(M1.Text);
+            _settings.M2Value = SanitizeButtonText(M2.Text);
+            _settings.M3Value = SanitizeButtonText(M3.Text);
+            _settings.M4Value = SanitizeButtonText(M4.Text);
+            _settings.M5Value = SanitizeButtonText(M5.Text);
+            _settings.M6Value = SanitizeButtonText(M6.Text);
+            _settings.M7Value = SanitizeButtonText(M7.Text);
+            _settings.M8Value = SanitizeButtonText(M8.Text);
+            _settings.M9Value = SanitizeButtonText(M9.Text);
+        }
+
+        private void ApplySettingsToUI()
+        {
+            InvertXCheckbox.IsChecked = _settings.InvertX;
+            InvertYCheckbox.IsChecked = _settings.InvertY;
+            SensitivityTextBox.Text = _settings.Sensitivity;
+            BrightnessSlider.Value = _settings.Brightness;
+            Gradient.IsChecked = _settings.IsGradient;
+            MonoColor.IsChecked = _settings.IsMonoColor;
+            ColorInputBox.Text = _settings.ColorValue;
+            SpeedG.Value = _settings.GradientSpeed;
+            M1.Text = _settings.M1Value;
+            M2.Text = _settings.M2Value;
+            M3.Text = _settings.M3Value;
+            M4.Text = _settings.M4Value;
+            M5.Text = _settings.M5Value;
+            M6.Text = _settings.M6Value;
+            M7.Text = _settings.M7Value;
+            M8.Text = _settings.M8Value;
+            M9.Text = _settings.M9Value;
+        }
+
+        private string BuildSettingsPayload()
+        {
+            string buttonPayload = string.Join("|", new[]
+            {
+                _settings.M1Value, _settings.M2Value, _settings.M3Value, _settings.M4Value, _settings.M5Value,
+                _settings.M6Value, _settings.M7Value, _settings.M8Value, _settings.M9Value
+            });
+
+            return string.Join(",", new[]
+            {
+                _settings.InvertX ? "1" : "0",
+                _settings.InvertY ? "1" : "0",
+                _settings.Sensitivity,
+                ((int)_settings.Brightness).ToString(),
+                _settings.IsGradient ? "1" : "0",
+                _settings.ColorValue,
+                ((int)_settings.GradientSpeed).ToString(),
+                buttonPayload
+            });
+        }
+
+        private bool TryParseSettings(string payload, out MouseSettings parsed)
+        {
+            parsed = MouseSettings.CreateDefault();
+
+            int[] commas = payload
+                .Select((ch, idx) => new { ch, idx })
+                .Where(x => x.ch == ',')
+                .Take(7)
+                .Select(x => x.idx)
+                .ToArray();
+
+            if (commas.Length < 7)
+            {
+                return false;
+            }
+
+            string[] fields = new string[8];
+            int start = 0;
+            for (int i = 0; i < 7; i++)
+            {
+                fields[i] = payload.Substring(start, commas[i] - start).Trim();
+                start = commas[i] + 1;
+            }
+            fields[7] = payload.Substring(start).Trim();
+
+            parsed.InvertX = fields[0] == "1";
+            parsed.InvertY = fields[1] == "1";
+            parsed.Sensitivity = string.IsNullOrWhiteSpace(fields[2]) ? "1" : fields[2];
+            parsed.Brightness = int.TryParse(fields[3], out int brightness) ? Clamp(brightness, 0, 100) : 50;
+            parsed.IsGradient = fields[4] == "1";
+            parsed.IsMonoColor = !parsed.IsGradient;
+            parsed.ColorValue = NormalizeColor(fields[5]);
+            parsed.GradientSpeed = int.TryParse(fields[6], out int speed) ? Clamp(speed, 0, 100) : 50;
+
+            string[] buttons = fields[7].Split('|');
+            if (buttons.Length > 0) parsed.M1Value = buttons[0];
+            if (buttons.Length > 1) parsed.M2Value = buttons[1];
+            if (buttons.Length > 2) parsed.M3Value = buttons[2];
+            if (buttons.Length > 3) parsed.M4Value = buttons[3];
+            if (buttons.Length > 4) parsed.M5Value = buttons[4];
+            if (buttons.Length > 5) parsed.M6Value = buttons[5];
+            if (buttons.Length > 6) parsed.M7Value = buttons[6];
+            if (buttons.Length > 7) parsed.M8Value = buttons[7];
+            if (buttons.Length > 8) parsed.M9Value = buttons[8];
+
+            return true;
+        }
+
+        private static string SanitizeButtonText(string value)
+        {
+            string sanitized = (value ?? string.Empty).Trim();
+            sanitized = sanitized.Replace(',', ' ');
+            sanitized = sanitized.Replace('|', '/');
+            return string.IsNullOrWhiteSpace(sanitized) ? "none" : sanitized;
+        }
+
+        private static string NormalizeColor(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return "000.000.000";
+            }
+
+            string[] parts = text.Split('.');
+            if (parts.Length != 3)
+            {
+                return "000.000.000";
+            }
+
+            int[] rgb = new int[3];
+            for (int i = 0; i < 3; i++)
+            {
+                if (!int.TryParse(parts[i], out int value))
+                {
+                    value = 0;
+                }
+
+                rgb[i] = Clamp(value, 0, 255);
+            }
+
+            return $"{rgb[0]:000}.{rgb[1]:000}.{rgb[2]:000}";
+        }
+
+        private static int Clamp(int value, int min, int max)
+        {
+            if (value < min) return min;
+            if (value > max) return max;
+            return value;
+        }
+
+        #endregion
+
+        #region UI events
+
+        private async void SaveButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (!await EnsureDongleConnectionAsync())
+            {
+                return;
+            }
+
+            if (!await EnsureAuthenticatedAsync(showUi: true))
+            {
+                return;
+            }
+
+            CollectSettingsFromUI();
+            _isWaitingForSaveResponse = true;
+            UpdateStatusBar("Отправка настроек на донгл...");
+            SendCommand($"SET_SETTINGS:{BuildSettingsPayload()}");
+        }
+
+        private async void ResetButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (!await EnsureDongleConnectionAsync())
+            {
+                return;
+            }
+
+            if (!await EnsureAuthenticatedAsync(showUi: true))
+            {
+                return;
+            }
+
+            UpdateStatusBar("Запрос настроек с донгла...");
+            SendCommand("GET_SETTINGS");
+        }
+
+        private async void ChangePasswordButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (!await EnsureDongleConnectionAsync())
+            {
+                return;
+            }
+
+            if (!await EnsureAuthenticatedAsync(showUi: true))
+            {
+                return;
+            }
+
+            while (_isConnected)
+            {
+                PasswordComboDialog dialog = new PasswordComboDialog(
+                    "Смена пароля",
+                    "Введите новую комбинацию (только цифры 1/2/3):",
+                    "Сохранить");
+
+                if (dialog.ShowDialog() != true)
+                {
+                    return;
+                }
+
+                string combo = dialog.PasswordCombo;
+                if (!IsValidPasswordCombo(combo))
+                {
+                    MessageBox.Show("Неверный формат. Используйте только цифры 1, 2, 3.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    continue;
+                }
+
+                string? resp = await SendCommandAndAwaitAsync(
+                    $"SET_PASSWORD:{combo}",
+                    s => s == "PASSWORD_CHANGED" || s.StartsWith("ERROR", StringComparison.Ordinal));
+
+                if (resp == "PASSWORD_CHANGED")
+                {
+                    MessageBox.Show("Пароль успешно изменен.", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                MessageBox.Show($"Ошибка смены пароля: {resp ?? "таймаут"}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void ColorInputBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        {
+            e.Handled = Regex.IsMatch(e.Text, "[^0-9.]");
+        }
+
+        private void ColorInputBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            ColorInputBox.Text = NormalizeColor(ColorInputBox.Text);
+        }
+
+        private void SensitivityTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        {
+            e.Handled = Regex.IsMatch(e.Text, "[^0-9.]");
+        }
+
+        private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            _portRefreshTimer?.Stop();
+            DisconnectFromPort();
+        }
+
+        #endregion
+
+        #region Diagnostics
+
+        private void Log(string message, string level = "INFO")
+        {
+            string line = $"[{DateTime.Now:HH:mm:ss.fff}] [{level}] {message}";
+            Debug.WriteLine(line);
+
+            Dispatcher.Invoke(() =>
+            {
+                if (LogTextBox != null)
+                {
+                    LogTextBox.AppendText(line + Environment.NewLine);
+                    LogTextBox.ScrollToEnd();
+                }
+            });
+        }
+
+        private void UpdateStatusBar(string message)
+        {
+            Title = $"CRM - Управление мышью | {message}";
+        }
+
+        #endregion
+    }
+
+    public class PasswordComboDialog : Window
+    {
+        private readonly TextBox _comboBox;
+        public string PasswordCombo { get; private set; } = string.Empty;
+
+        public PasswordComboDialog(string title, string message, string okButtonText)
+        {
+            Title = title;
+            Width = 390;
+            Height = 190;
+            WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            ResizeMode = ResizeMode.NoResize;
+
+            Grid root = new Grid { Margin = new Thickness(14) };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            TextBlock text = new TextBlock
+            {
+                Text = message,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            Grid.SetRow(text, 0);
+
+            _comboBox = new TextBox
+            {
+                Margin = new Thickness(0, 0, 0, 12),
+                FontSize = 16,
+                MaxLength = 16,
+                TextAlignment = TextAlignment.Center
+            };
+            _comboBox.PreviewTextInput += (_, e) => e.Handled = !Regex.IsMatch(e.Text, "^[123]+$");
+            _comboBox.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Enter)
+                {
+                    Submit();
+                }
+            };
+            Grid.SetRow(_comboBox, 1);
+
+            StackPanel panel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            Button ok = new Button { Content = okButtonText, Width = 90, Margin = new Thickness(0, 0, 8, 0) };
+            ok.Click += (_, _) => Submit();
+            Button cancel = new Button { Content = "Отмена", Width = 90 };
+            cancel.Click += (_, _) => DialogResult = false;
+
+            panel.Children.Add(ok);
+            panel.Children.Add(cancel);
+            Grid.SetRow(panel, 2);
+
+            root.Children.Add(text);
+            root.Children.Add(_comboBox);
+            root.Children.Add(panel);
+
+            Content = root;
+            Loaded += (_, _) => _comboBox.Focus();
+        }
+
+        private void Submit()
+        {
+            string value = (_comboBox.Text ?? string.Empty).Trim();
+            if (!Regex.IsMatch(value, "^[123]{1,16}$"))
+            {
+                MessageBox.Show("Комбинация должна содержать только цифры 1, 2, 3.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            PasswordCombo = value;
+            DialogResult = true;
+        }
     }
 }
