@@ -103,6 +103,7 @@ namespace CBTM
             SaveButton.Click += SaveButton_Click;
             ResetButton.Click += ResetButton_Click;
             ChangePasswordButton.Click += ChangePasswordButton_Click;
+            HelpButton.Click += HelpButton_Click;
 
             PortComboBox.SelectionChanged += PortComboBox_SelectionChanged;
 
@@ -1092,6 +1093,31 @@ namespace CBTM
 
                 MessageBox.Show($"Ошибка смены пароля: {resp ?? "таймаут"}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
+        }
+
+        private void HelpButton_Click(object sender, RoutedEventArgs e)
+        {
+            const string helpText =
+                "Справка по функциям программы\n\n" +
+                "1) Подключение\n" +
+                "- Программа автоматически ищет и подключает донгл Arduino Leonardo.\n" +
+                "- В выпадающем списке COM можно выбрать порт вручную.\n\n" +
+                "2) Безопасность\n" +
+                "- После подключения выполняется проверка пароля (комбинация 1/2/3).\n" +
+                "- Пока пароль не введен правильно, настройки и команды заблокированы.\n\n" +
+                "3) Курсор\n" +
+                "- Инверсия X/Y и чувствительность сенсора.\n\n" +
+                "4) Подсветка\n" +
+                "- Яркость, режим Градиент/Моноцвет, цвет RGB (формат 000.000.000), скорость градиента.\n\n" +
+                "5) Клавиши\n" +
+                "- Настройка биндов M1-M9 и кнопка смены пароля.\n\n" +
+                "6) Кнопки внизу\n" +
+                "- Сохранить: отправляет текущие настройки на донгл.\n" +
+                "- Сбросить: запрашивает настройки с донгла.\n\n" +
+                "7) Лог активности\n" +
+                "- Показывает обмен с донглом: TX (отправка), RX (прием), ошибки и статус.";
+
+            MessageBox.Show(helpText, "Справка о функциях", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void ColorInputBox_PreviewTextInput(object sender, TextCompositionEventArgs e)

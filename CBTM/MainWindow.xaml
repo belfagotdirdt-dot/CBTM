@@ -242,6 +242,10 @@
                       ItemContainerStyle="{StaticResource CustomComboBoxItemStyle}"  
                       Height="24" />
 
+            <Button Content="Справка" x:Name="HelpButton"
+                    Style="{StaticResource ActionButtonsStyle}"
+                    ToolTip="Справка о функциях программы"/>
+
             <Button Content="Сбросить" x:Name="ResetButton" 
                     Style="{StaticResource ActionButtonsStyle}" 
                     ToolTip="Загрузить настройки с Arduino"/>
