@@ -317,14 +317,23 @@
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M1" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M1" Text="left click" Width="100" HorizontalAlignment="Left"/>
+                            <Button Content="ПК…" x:Name="M1HostButton" Width="48" Height="24"
+                                    Margin="6,0,0,0" Style="{StaticResource DefaultButtonStyle}"
+                                    ToolTip="Назначить действие на ПК (запуск программы или показ текста)"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M2" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M2" Text="right click" Width="100" HorizontalAlignment="Left"/>
+                            <Button Content="ПК…" x:Name="M2HostButton" Width="48" Height="24"
+                                    Margin="6,0,0,0" Style="{StaticResource DefaultButtonStyle}"
+                                    ToolTip="Назначить действие на ПК (запуск программы или показ текста)"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M3" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M3" Text="middle click" Width="100" HorizontalAlignment="Left"/>
+                            <Button Content="ПК…" x:Name="M3HostButton" Width="48" Height="24"
+                                    Margin="6,0,0,0" Style="{StaticResource DefaultButtonStyle}"
+                                    ToolTip="Назначить действие на ПК (запуск программы или показ текста)"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M4" Width="60" HorizontalAlignment="Left"/>

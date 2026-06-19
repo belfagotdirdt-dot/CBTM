@@ -1,9 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.IO.Ports;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,6 +19,20 @@ using System.Windows.Threading;
 
 namespace CBTM
 {
+    public enum HostActionType
+    {
+        None = 0,
+        Program,
+        Text,
+        Url
+    }
+
+    public class HostActionConfig
+    {
+        public HostActionType Type { get; set; } = HostActionType.None;
+        public string Payload { get; set; } = string.Empty;
+    }
+
 
     public partial class MainWindow : Window
     {
@@ -65,6 +82,15 @@ namespace CBTM
             }
         }
 
+        private static readonly JsonSerializerOptions HostJsonOptions = new()
+        {
+            WriteIndented = true,
+            Converters = { new JsonStringEnumConverter() }
+        };
+
+        // Действия ПК для кнопок M1..M9 (физически работают только M1-M3).
+        private readonly HostActionConfig[] _hostActions = CreateEmptyHostActions();
+
         private MouseSettings _settings = MouseSettings.CreateDefault();
         private SerialPort? _serialPort;
         private readonly StringBuilder _serialLineBuffer = new();
@@ -72,7 +98,6 @@ namespace CBTM
         private bool _isConnected;
         private bool _isConnecting;
         private bool _isUpdatingPortCombo;
-        private bool _isWaitingForSaveResponse;
 
         private bool _isAuthenticated;
         private Task<bool>? _authFlowTask;
@@ -80,8 +105,6 @@ namespace CBTM
         private TaskCompletionSource<string>? _awaitResponseTcs;
         private Func<string, bool>? _awaitResponseMatcher;
 
-        private int _failedPasswordChangeAttempts = 0;
-        private DateTime? _passwordChangeLockUntil = null;
         private const int MaxPasswordChangeAttempts = 3;
         private const int PasswordChangeLockMinutes = 1;
         private int _failedVerificationAttempts = 0;
@@ -91,6 +114,7 @@ namespace CBTM
         public MainWindow()
         {
             InitializeComponent();
+            LoadHostActions();
             SetupEventHandlers();
             ApplySettingsToUI();
             UpdateAuthUiState(false);
@@ -98,12 +122,15 @@ namespace CBTM
             StartPortRefreshTimer();
             _ = AutoConnectToDongleAsync();
 
+            // Таймер работает только во время блокировки смены пароля — иначе он бы
+            // каждую секунду затирал hover-подсветку кнопки. Запускается в момент
+            // блокировки и останавливается, когда она истекает.
             _lockUpdateTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(1)
             };
             _lockUpdateTimer.Tick += (_, _) => UpdatePasswordChangeButtonState();
-            _lockUpdateTimer.Start();
+            UpdatePasswordChangeButtonState();
         }
 
         #region Init
@@ -114,6 +141,10 @@ namespace CBTM
             ResetButton.Click += ResetButton_Click;
             ChangePasswordButton.Click += ChangePasswordButton_Click;
             HelpButton.Click += HelpButton_Click;
+
+            M1HostButton.Click += (_, _) => ConfigureHostAction(0, "M1");
+            M2HostButton.Click += (_, _) => ConfigureHostAction(1, "M2");
+            M3HostButton.Click += (_, _) => ConfigureHostAction(2, "M3");
 
             PortComboBox.SelectionChanged += PortComboBox_SelectionChanged;
 
@@ -395,7 +426,6 @@ namespace CBTM
             {
                 _isConnected = false;
                 _isAuthenticated = false;
-                _isWaitingForSaveResponse = false;
                 _authFlowTask = null;
                 lock (_awaitResponseLock)
                 {
@@ -458,6 +488,16 @@ namespace CBTM
         {
             Log($"<- {data}", "RX");
             TryCompleteAwaitedResponse(data);
+
+            if (data.StartsWith("BTN:", StringComparison.Ordinal))
+            {
+                if (int.TryParse(data.Substring(4).Trim(), out int buttonIndex))
+                {
+                    ExecuteHostAction(buttonIndex);
+                }
+
+                return;
+            }
 
             if (data.StartsWith("SERIAL_IN:", StringComparison.Ordinal) ||
                 data.StartsWith("RADIO:", StringComparison.Ordinal))
@@ -538,7 +578,6 @@ namespace CBTM
 
             if (data == "OK")
             {
-                _isWaitingForSaveResponse = false;
                 UpdateStatusBar("Настройки отправлены на донгл");
                 Log("Настройки применены донглом", "SUCCESS");
                 return;
@@ -546,7 +585,6 @@ namespace CBTM
 
             if (data.StartsWith("ERROR", StringComparison.Ordinal))
             {
-                _isWaitingForSaveResponse = false;
                 UpdateStatusBar("Ошибка от донгла");
                 Log($"Донгл вернул ошибку: {data}", "ERROR");
                 MessageBox.Show($"Донгл вернул ошибку: {data}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -670,6 +708,8 @@ namespace CBTM
             if (M3 != null) M3.IsEnabled = enabled;
             if (M4 != null) M4.IsEnabled = enabled;
             if (M5 != null) M5.IsEnabled = enabled;
+
+            RefreshHostUi();
         }
 
         private static bool IsValidPasswordCombo(string? combo)
@@ -761,6 +801,21 @@ namespace CBTM
             }
         }
 
+        private async Task RequestSettingsFromDeviceAsync()
+        {
+            UpdateStatusBar("Загрузка настроек с донгла...");
+            string? resp = await SendCommandAndAwaitAsync(
+                "GET_SETTINGS",
+                s => s.StartsWith("SETTINGS:", StringComparison.Ordinal) || s.StartsWith("ERROR", StringComparison.Ordinal),
+                timeoutMs: 3000);
+
+            if (resp == null)
+            {
+                Log("Настройки не получены с донгла (таймаут)", "WARNING");
+                UpdateStatusBar("Не удалось загрузить настройки");
+            }
+        }
+
         private async Task<bool> EnsureAuthenticatedCoreAsync(bool showUi)
         {
             UpdateAuthUiState(false);
@@ -783,7 +838,7 @@ namespace CBTM
             if (state == "AUTH_OK")
             {
                 UpdateAuthUiState(true);
-                SendCommand("GET_SETTINGS", showErrors: false);
+                _ = RequestSettingsFromDeviceAsync();
                 return true;
             }
 
@@ -820,7 +875,7 @@ namespace CBTM
                     if (resp == "PASSWORD_CHANGED")
                     {
                         UpdateAuthUiState(true);
-                        SendCommand("GET_SETTINGS", showErrors: false);
+                        _ = RequestSettingsFromDeviceAsync();
                         MessageBox.Show("Пароль установлен.", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
                         return true;
                     }
@@ -857,7 +912,7 @@ namespace CBTM
                 if (authResp == "AUTH_OK")
                 {
                     UpdateAuthUiState(true);
-                    SendCommand("GET_SETTINGS", showErrors: false);
+                    _ = RequestSettingsFromDeviceAsync();
                     return true;
                 }
 
@@ -881,11 +936,23 @@ namespace CBTM
             _settings.IsMonoColor = MonoColor.IsChecked ?? false;
             _settings.ColorValue = NormalizeColor(ColorInputBox.Text);
             _settings.GradientSpeed = SpeedG.Value;
-            _settings.M1Value = SanitizeButtonText(M1.Text);
-            _settings.M2Value = SanitizeButtonText(M2.Text);
-            _settings.M3Value = SanitizeButtonText(M3.Text);
-            _settings.M4Value = SanitizeButtonText(M4.Text);
-            _settings.M5Value = SanitizeButtonText(M5.Text);
+            _settings.M1Value = ResolveButtonToken(0, M1.Text);
+            _settings.M2Value = ResolveButtonToken(1, M2.Text);
+            _settings.M3Value = ResolveButtonToken(2, M3.Text);
+            _settings.M4Value = ResolveButtonToken(3, M4.Text);
+            _settings.M5Value = ResolveButtonToken(4, M5.Text);
+        }
+
+        // Если на кнопку назначено действие ПК, на донгл уходит маркер "host"
+        // (донгл не делает HID-клик, а присылает "BTN:n" при нажатии).
+        private string ResolveButtonToken(int index, string text)
+        {
+            if (index >= 0 && index < _hostActions.Length && _hostActions[index].Type != HostActionType.None)
+            {
+                return "host";
+            }
+
+            return SanitizeButtonText(text);
         }
 
         private void ApplySettingsToUI()
@@ -918,6 +985,8 @@ namespace CBTM
                     SpeedG.IsEnabled = true;
                 }
             }
+
+            RefreshHostUi();
         }
 
         private string BuildSettingsPayload()
@@ -1043,7 +1112,6 @@ namespace CBTM
             }
 
             CollectSettingsFromUI();
-            _isWaitingForSaveResponse = true;
             UpdateStatusBar("Отправка настроек на донгл...");
             SendCommand($"SET_SETTINGS:{BuildSettingsPayload()}");
         }
@@ -1066,31 +1134,34 @@ namespace CBTM
 
         private void UpdatePasswordChangeButtonState()
         {
-            bool isLocked = _verificationLockUntil.HasValue && DateTime.Now < _verificationLockUntil.Value;
-
-            if (ChangePasswordButton != null)
+            if (ChangePasswordButton == null)
             {
-                ChangePasswordButton.IsEnabled = !isLocked;
+                return;
+            }
 
-                if (isLocked)
-                {
-                    ChangePasswordButton.Background = System.Windows.Media.Brushes.DarkGray;
-                    ChangePasswordButton.Foreground = System.Windows.Media.Brushes.Black;
-                    ChangePasswordButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
-                    ChangePasswordButton.BorderThickness = new Thickness(1);
+            // Паттерн `is DateTime lockUntil` напрямую охраняет блок —
+            // внутри lockUntil гарантированно не null (нет предупреждения CS8629).
+            if (_verificationLockUntil is DateTime lockUntil && DateTime.Now < lockUntil)
+            {
+                ChangePasswordButton.IsEnabled = false;
+                ChangePasswordButton.Background = System.Windows.Media.Brushes.DarkGray;
+                ChangePasswordButton.Foreground = System.Windows.Media.Brushes.Black;
+                ChangePasswordButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
+                ChangePasswordButton.BorderThickness = new Thickness(1);
 
-                    int remainingSeconds = (int)(_verificationLockUntil.Value - DateTime.Now).TotalSeconds;
-                    ChangePasswordButton.Content = $"Заблокировано ({remainingSeconds}с)";
-                }
-                else
-                {
-                    ChangePasswordButton.Background = System.Windows.Media.Brushes.White;
-                    ChangePasswordButton.Foreground = System.Windows.Media.Brushes.Black;
-                    ChangePasswordButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
-                    ChangePasswordButton.BorderThickness = new Thickness(1);
+                int remainingSeconds = (int)(lockUntil - DateTime.Now).TotalSeconds;
+                ChangePasswordButton.Content = $"Заблокировано ({remainingSeconds}с)";
+            }
+            else
+            {
+                ChangePasswordButton.IsEnabled = true;
+                ChangePasswordButton.Background = System.Windows.Media.Brushes.White;
+                ChangePasswordButton.Foreground = System.Windows.Media.Brushes.Black;
+                ChangePasswordButton.Content = "Сменить пароль";
 
-                    ChangePasswordButton.Content = "Сменить пароль";
-                }
+                // Блокировка снята — таймер больше не нужен. Рамку не трогаем,
+                // ею управляют обработчики наведения (hover).
+                _lockUpdateTimer?.Stop();
             }
         }
 
@@ -1153,12 +1224,25 @@ namespace CBTM
                     break;
                 }
 
+                // Неверным паролем считаем только явный отказ донгла (AUTH_FAILED).
+                // Таймаут или ошибка связи не должны тратить попытку и вести к блокировке.
+                if (verifyResp != "AUTH_FAILED")
+                {
+                    MessageBox.Show(
+                        $"Нет ответа от донгла ({verifyResp ?? "таймаут"}).\nПопробуйте ещё раз.",
+                        "Ошибка связи",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    continue;
+                }
+
                 _failedVerificationAttempts++;
 
                 if (_failedVerificationAttempts >= MaxPasswordChangeAttempts)
                 {
                     _verificationLockUntil = DateTime.Now.AddMinutes(PasswordChangeLockMinutes);
                     UpdatePasswordChangeButtonState();
+                    _lockUpdateTimer?.Start();
                     MessageBox.Show(
                         $"Превышено количество попыток ввода пароля ({MaxPasswordChangeAttempts}).\n" +
                         $"Функция смены пароля заблокирована на {PasswordChangeLockMinutes} минуту.",
@@ -1410,6 +1494,228 @@ namespace CBTM
 
         #endregion
 
+        #region Host actions
+
+        private static HostActionConfig[] CreateEmptyHostActions()
+        {
+            var actions = new HostActionConfig[9];
+            for (int i = 0; i < actions.Length; i++)
+            {
+                actions[i] = new HostActionConfig();
+            }
+
+            return actions;
+        }
+
+        private void ConfigureHostAction(int index, string buttonLabel)
+        {
+            if (index < 0 || index >= _hostActions.Length)
+            {
+                return;
+            }
+
+            HostActionDialog dialog = new HostActionDialog(buttonLabel, _hostActions[index]) { Owner = this };
+            if (dialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            _hostActions[index] = dialog.Result;
+
+            // Если действие снято, а в поле бинда остался маркер "host",
+            // вернём редактируемое значение по умолчанию.
+            if (_hostActions[index].Type == HostActionType.None)
+            {
+                TextBox? bindBox = GetBindBox(index);
+                if (bindBox != null && string.Equals(bindBox.Text?.Trim(), "host", StringComparison.OrdinalIgnoreCase))
+                {
+                    bindBox.Text = DefaultBindFor(index);
+                }
+            }
+
+            SaveHostActions();
+            RefreshHostUi();
+
+            if (_hostActions[index].Type != HostActionType.None)
+            {
+                Log($"{buttonLabel}: назначено действие ПК ({DescribeHostAction(_hostActions[index])}). " +
+                    "Нажмите «Сохранить», чтобы применить на донгле.", "INFO");
+            }
+            else
+            {
+                Log($"{buttonLabel}: действие ПК снято. Нажмите «Сохранить», чтобы применить.", "INFO");
+            }
+        }
+
+        private TextBox? GetBindBox(int index)
+        {
+            return index switch
+            {
+                0 => M1,
+                1 => M2,
+                2 => M3,
+                _ => null
+            };
+        }
+
+        private static string DefaultBindFor(int index)
+        {
+            return index switch
+            {
+                0 => "left click",
+                1 => "right click",
+                2 => "middle click",
+                _ => "none"
+            };
+        }
+
+        private void RefreshHostUi()
+        {
+            RefreshHostRow(0, M1, M1HostButton);
+            RefreshHostRow(1, M2, M2HostButton);
+            RefreshHostRow(2, M3, M3HostButton);
+        }
+
+        private void RefreshHostRow(int index, TextBox? bindBox, Button? hostButton)
+        {
+            if (bindBox == null || hostButton == null)
+            {
+                return;
+            }
+
+            HostActionConfig action = _hostActions[index];
+            bool isHost = action.Type != HostActionType.None;
+            bool deviceSaysHost = string.Equals(bindBox.Text?.Trim(), "host", StringComparison.OrdinalIgnoreCase);
+
+            // Поле бинда не используется, когда на кнопку назначено действие ПК.
+            bindBox.IsEnabled = _isAuthenticated && !isHost && !deviceSaysHost;
+
+            if (isHost)
+            {
+                hostButton.Content = "ПК ✓";
+                hostButton.ToolTip = DescribeHostAction(action);
+            }
+            else if (deviceSaysHost)
+            {
+                hostButton.Content = "ПК ?";
+                hostButton.ToolTip = "На донгле кнопка помечена как действие ПК, но действие не настроено на этом компьютере. Нажмите, чтобы задать.";
+            }
+            else
+            {
+                hostButton.Content = "ПК…";
+                hostButton.ToolTip = "Назначить действие на ПК (запуск программы или показ текста)";
+            }
+        }
+
+        private static string DescribeHostAction(HostActionConfig action)
+        {
+            return action.Type switch
+            {
+                HostActionType.Program => $"Программа: {action.Payload}",
+                HostActionType.Text => $"Текст: {ShortenText(action.Payload)}",
+                HostActionType.Url => $"Сайт: {action.Payload}",
+                _ => "Нет действия"
+            };
+        }
+
+        private static string ShortenText(string text)
+        {
+            string single = (text ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
+            return single.Length <= 40 ? single : single.Substring(0, 40) + "…";
+        }
+
+        private void ExecuteHostAction(int oneBasedIndex)
+        {
+            int index = oneBasedIndex - 1;
+            if (index < 0 || index >= _hostActions.Length)
+            {
+                return;
+            }
+
+            HostActionConfig action = _hostActions[index];
+            if (action.Type == HostActionType.None || string.IsNullOrWhiteSpace(action.Payload))
+            {
+                Log($"BTN:{oneBasedIndex} — действие ПК не настроено", "WARNING");
+                return;
+            }
+
+            try
+            {
+                switch (action.Type)
+                {
+                    case HostActionType.Program:
+                        Process.Start(new ProcessStartInfo { FileName = action.Payload, UseShellExecute = true });
+                        Log($"M{oneBasedIndex}: запуск программы {action.Payload}", "SUCCESS");
+                        break;
+
+                    case HostActionType.Url:
+                        Process.Start(new ProcessStartInfo { FileName = action.Payload, UseShellExecute = true });
+                        Log($"M{oneBasedIndex}: открытие сайта {action.Payload}", "SUCCESS");
+                        break;
+
+                    case HostActionType.Text:
+                        TextDisplayWindow textWindow = new TextDisplayWindow($"M{oneBasedIndex}", action.Payload) { Owner = this };
+                        textWindow.Show();
+                        Log($"M{oneBasedIndex}: показан текст", "SUCCESS");
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка действия M{oneBasedIndex}: {ex.Message}", "ERROR");
+                MessageBox.Show($"Не удалось выполнить действие кнопки M{oneBasedIndex}:\n{ex.Message}",
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private static string GetHostActionsPath()
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CBTM");
+            Directory.CreateDirectory(dir);
+            return Path.Combine(dir, "hostactions.json");
+        }
+
+        private void LoadHostActions()
+        {
+            try
+            {
+                string path = GetHostActionsPath();
+                if (!File.Exists(path))
+                {
+                    return;
+                }
+
+                HostActionConfig[]? data = JsonSerializer.Deserialize<HostActionConfig[]>(File.ReadAllText(path), HostJsonOptions);
+                if (data == null)
+                {
+                    return;
+                }
+
+                for (int i = 0; i < _hostActions.Length && i < data.Length; i++)
+                {
+                    _hostActions[i] = data[i] ?? new HostActionConfig();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Не удалось загрузить действия ПК: {ex.Message}", "WARNING");
+            }
+        }
+
+        private void SaveHostActions()
+        {
+            try
+            {
+                File.WriteAllText(GetHostActionsPath(), JsonSerializer.Serialize(_hostActions, HostJsonOptions));
+            }
+            catch (Exception ex)
+            {
+                Log($"Не удалось сохранить действия ПК: {ex.Message}", "WARNING");
+            }
+        }
+
+        #endregion
+
         #region Diagnostics
 
         private void Log(string message, string level = "INFO")
@@ -1513,6 +1819,172 @@ namespace CBTM
 
             PasswordCombo = value;
             DialogResult = true;
+        }
+    }
+
+    // Диалог настройки действия ПК для одной кнопки: тип + значение (+ обзор файла).
+    public class HostActionDialog : Window
+    {
+        private readonly ComboBox _typeBox;
+        private readonly TextBox _valueBox;
+        private readonly Button _browseButton;
+        private readonly TextBlock _hint;
+
+        public HostActionConfig Result { get; private set; } = new HostActionConfig();
+
+        public HostActionDialog(string buttonLabel, HostActionConfig current)
+        {
+            Title = $"Действие ПК — {buttonLabel}";
+            Width = 480;
+            Height = 320;
+            WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            ResizeMode = ResizeMode.NoResize;
+
+            Grid root = new Grid { Margin = new Thickness(14) };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            TextBlock typeLabel = new TextBlock { Text = "Тип действия:", Margin = new Thickness(0, 0, 0, 4) };
+            Grid.SetRow(typeLabel, 0);
+
+            StackPanel typeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
+            Grid.SetRow(typeRow, 1);
+
+            _typeBox = new ComboBox { Width = 220 };
+            _typeBox.Items.Add("Нет действия");
+            _typeBox.Items.Add("Запуск программы / файла");
+            _typeBox.Items.Add("Показ текста в окне");
+            _typeBox.Items.Add("Открытие сайта (URL)");
+            _typeBox.SelectedIndex = (int)current.Type;
+            _typeBox.SelectionChanged += (_, _) => UpdateState();
+
+            _browseButton = new Button { Content = "Обзор…", Width = 90, Margin = new Thickness(8, 0, 0, 0) };
+            _browseButton.Click += (_, _) => Browse();
+
+            typeRow.Children.Add(_typeBox);
+            typeRow.Children.Add(_browseButton);
+
+            _valueBox = new TextBox
+            {
+                Text = current.Payload ?? string.Empty,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalContentAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            Grid.SetRow(_valueBox, 2);
+
+            _hint = new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = System.Windows.Media.Brushes.Gray,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+
+            StackPanel bottom = new StackPanel { Orientation = Orientation.Vertical };
+            Grid.SetRow(bottom, 3);
+
+            StackPanel buttons = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            Button ok = new Button { Content = "OK", Width = 90, Margin = new Thickness(0, 0, 8, 0) };
+            ok.Click += (_, _) => Submit();
+            Button cancel = new Button { Content = "Отмена", Width = 90 };
+            cancel.Click += (_, _) => DialogResult = false;
+
+            buttons.Children.Add(ok);
+            buttons.Children.Add(cancel);
+
+            bottom.Children.Add(_hint);
+            bottom.Children.Add(buttons);
+
+            root.Children.Add(typeLabel);
+            root.Children.Add(typeRow);
+            root.Children.Add(_valueBox);
+            root.Children.Add(bottom);
+
+            Content = root;
+            UpdateState();
+        }
+
+        private HostActionType SelectedType => (HostActionType)Math.Max(0, _typeBox.SelectedIndex);
+
+        private void UpdateState()
+        {
+            HostActionType type = SelectedType;
+            _browseButton.IsEnabled = type == HostActionType.Program;
+            _valueBox.IsEnabled = type != HostActionType.None;
+
+            _hint.Text = type switch
+            {
+                HostActionType.Program => "Укажите путь к программе или файлу. Нажмите «Обзор…», чтобы выбрать.",
+                HostActionType.Text => "Введите текст — он откроется в отдельном окне при нажатии кнопки.",
+                HostActionType.Url => "Введите адрес сайта, например https://example.com",
+                _ => "Действие ПК для этой кнопки отключено (кнопка работает как обычный бинд)."
+            };
+        }
+
+        private void Browse()
+        {
+            Microsoft.Win32.OpenFileDialog dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Выберите программу или файл",
+                Filter = "Программы (*.exe)|*.exe|Все файлы (*.*)|*.*"
+            };
+
+            if (dialog.ShowDialog(this) == true)
+            {
+                _valueBox.Text = dialog.FileName;
+            }
+        }
+
+        private void Submit()
+        {
+            HostActionType type = SelectedType;
+            string payload = (_valueBox.Text ?? string.Empty).Trim();
+
+            if (type != HostActionType.None && string.IsNullOrWhiteSpace(payload))
+            {
+                MessageBox.Show("Введите значение для выбранного действия.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            Result = new HostActionConfig
+            {
+                Type = type,
+                Payload = type == HostActionType.None ? string.Empty : payload
+            };
+            DialogResult = true;
+        }
+    }
+
+    // Окно для показа произвольного текста при нажатии кнопки.
+    public class TextDisplayWindow : Window
+    {
+        public TextDisplayWindow(string buttonLabel, string text)
+        {
+            Title = $"Текст — {buttonLabel}";
+            Width = 520;
+            Height = 360;
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+
+            Content = new TextBox
+            {
+                Text = text ?? string.Empty,
+                IsReadOnly = true,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                FontSize = 16,
+                Margin = new Thickness(12),
+                BorderThickness = new Thickness(0)
+            };
         }
     }
 }

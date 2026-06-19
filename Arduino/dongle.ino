@@ -76,6 +76,7 @@ enum MouseAction : uint8_t {
   ACTION_LEFT,
   ACTION_RIGHT,
   ACTION_MIDDLE,
+  ACTION_HOST,   // Не HID-клик: при нажатии шлём событие на ПК ("BTN:n").
 };
 
 MouseAction g_buttonMapLeft = ACTION_LEFT;
@@ -83,6 +84,7 @@ MouseAction g_buttonMapRight = ACTION_RIGHT;
 MouseAction g_buttonMapMiddle = ACTION_MIDDLE;
 
 uint8_t prevMappedButtons = 0;
+uint8_t prevHostPhysical = 0;
 uint32_t lastPacketMs = 0;
 uint8_t ledSettingsSeq = 0;
 
@@ -117,6 +119,9 @@ MouseAction parseMouseAction(const char *rawLabel, MouseAction fallback) {
   }
   if (label == "middle click") {
     return ACTION_MIDDLE;
+  }
+  if (label == "host") {
+    return ACTION_HOST;
   }
   return fallback;
 }
@@ -209,6 +214,28 @@ uint8_t mapPhysicalButtonsToMouse(const uint8_t physicalButtons) {
   return mapped;
 }
 
+void checkHostButtonEdge(const uint8_t physical, const uint8_t mask, const MouseAction action, const uint8_t index) {
+  if (action != ACTION_HOST) {
+    return;
+  }
+
+  const bool wasPressed = (prevHostPhysical & mask) != 0;
+  const bool nowPressed = (physical & mask) != 0;
+
+  if (!wasPressed && nowPressed) {
+    Serial.print("BTN:");
+    Serial.println(index);
+  }
+}
+
+// Кнопки с действием ACTION_HOST не делают HID-клик, а сообщают о нажатии на ПК.
+void emitHostButtonEvents(const uint8_t physical) {
+  checkHostButtonEdge(physical, BTN_LEFT_MASK, g_buttonMapLeft, 1);
+  checkHostButtonEdge(physical, BTN_RIGHT_MASK, g_buttonMapRight, 2);
+  checkHostButtonEdge(physical, BTN_MIDDLE_MASK, g_buttonMapMiddle, 3);
+  prevHostPhysical = physical & (BTN_LEFT_MASK | BTN_RIGHT_MASK | BTN_MIDDLE_MASK);
+}
+
 uint8_t calcLedSettingsChecksum(const SettingRGBLedMouse &p) {
   return static_cast<uint8_t>(
       p.magic ^ p.version ^ p.seq ^ p.brightness ^ p.isGradient ^
@@ -278,7 +305,7 @@ bool isValidPasswordCombo(const String &comboRaw) {
 
   for (int i = 0; i < combo.length(); ++i) {
     const char c = combo[i];
-    if (c != '1' && c != '2' && c != '3') {
+    if (c < '0' || c > '9') {
       return false;
     }
   }
@@ -592,6 +619,7 @@ void loop() {
       prevMappedButtons = 0;
       releaseAllButtons();
     }
+    prevHostPhysical = 0;
 
     while (radio.available()) {
       MousePacket ignored{};
@@ -607,6 +635,8 @@ void loop() {
     MousePacket p{};
     radio.read(&p, sizeof(p));
     lastPacketMs = millis();
+
+    emitHostButtonEvents(p.buttons);
 
     const uint8_t mappedButtons = mapPhysicalButtonsToMouse(p.buttons);
     syncMappedButton(mappedButtons, MAPPED_RIGHT_MASK, MOUSE_RIGHT);
@@ -636,6 +666,9 @@ void loop() {
   if (prevMappedButtons != 0 && (millis() - lastPacketMs > RX_TIMEOUT_MS)) {
     prevMappedButtons = 0;
     releaseAllButtons();
+    // prevHostPhysical намеренно НЕ сбрасываем: иначе удержанная host-кнопка
+    // после кратковременной потери связи воспримется как новое нажатие
+    // и действие ПК сработает повторно.
   }
 
   delay(5);
