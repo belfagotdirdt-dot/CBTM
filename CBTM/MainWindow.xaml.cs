@@ -10,10 +10,13 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace CBTM
 {
+
     public partial class MainWindow : Window
     {
         private const int DongleBaudRate = 9600;
@@ -38,10 +41,6 @@ namespace CBTM
             public string M3Value { get; set; }
             public string M4Value { get; set; }
             public string M5Value { get; set; }
-            public string M6Value { get; set; }
-            public string M7Value { get; set; }
-            public string M8Value { get; set; }
-            public string M9Value { get; set; }
             public string SelectedPortName { get; set; }
 
             public static MouseSettings CreateDefault()
@@ -61,10 +60,6 @@ namespace CBTM
                     M3Value = "middle click",
                     M4Value = "back",
                     M5Value = "forward",
-                    M6Value = "Volume Up",
-                    M7Value = "Volume Down",
-                    M8Value = "Mute",
-                    M9Value = "Task View",
                     SelectedPortName = string.Empty
                 };
             }
@@ -85,6 +80,14 @@ namespace CBTM
         private TaskCompletionSource<string>? _awaitResponseTcs;
         private Func<string, bool>? _awaitResponseMatcher;
 
+        private int _failedPasswordChangeAttempts = 0;
+        private DateTime? _passwordChangeLockUntil = null;
+        private const int MaxPasswordChangeAttempts = 3;
+        private const int PasswordChangeLockMinutes = 1;
+        private int _failedVerificationAttempts = 0;
+        private DateTime? _verificationLockUntil = null;
+        private DispatcherTimer? _lockUpdateTimer;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -94,6 +97,13 @@ namespace CBTM
             RefreshComPorts();
             StartPortRefreshTimer();
             _ = AutoConnectToDongleAsync();
+
+            _lockUpdateTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(1)
+            };
+            _lockUpdateTimer.Tick += (_, _) => UpdatePasswordChangeButtonState();
+            _lockUpdateTimer.Start();
         }
 
         #region Init
@@ -110,6 +120,15 @@ namespace CBTM
             ColorInputBox.PreviewTextInput += ColorInputBox_PreviewTextInput;
             ColorInputBox.LostFocus += ColorInputBox_LostFocus;
             SensitivityTextBox.PreviewTextInput += SensitivityTextBox_PreviewTextInput;
+
+            ChangePasswordButton.MouseEnter += ChangePasswordButton_MouseEnter;
+            ChangePasswordButton.MouseLeave += ChangePasswordButton_MouseLeave;
+
+            // Обработчики переключения режимов подсветки
+            MonoColor.Checked += MonoColor_Checked;
+            MonoColor.Unchecked += MonoColor_Unchecked;
+            Gradient.Checked += Gradient_Checked;
+            Gradient.Unchecked += Gradient_Unchecked;
         }
 
         private void StartPortRefreshTimer()
@@ -267,7 +286,6 @@ namespace CBTM
                         using SerialPort probe = CreateSerialPort(portName);
                         probe.Open();
 
-                        // Leonardo обычно делает reset после открытия порта.
                         Thread.Sleep(LeonardoBootDelayMs);
 
                         probe.DiscardInBuffer();
@@ -444,7 +462,6 @@ namespace CBTM
             if (data.StartsWith("SERIAL_IN:", StringComparison.Ordinal) ||
                 data.StartsWith("RADIO:", StringComparison.Ordinal))
             {
-                // Это диагностический трафик: уже показан в логе RX, дополнительная обработка не нужна.
                 return;
             }
 
@@ -592,7 +609,6 @@ namespace CBTM
             bool isDongle = await IsDonglePortAsync(selected);
             if (!isDongle)
             {
-                // Повторная проверка снижает ложные срабатывания после hot-plug/reset.
                 await Task.Delay(300);
                 isDongle = await IsDonglePortAsync(selected);
             }
@@ -603,7 +619,7 @@ namespace CBTM
             }
             else
             {
-                Log($"{selected} не ответил как донгл (проверь прошивку и скорость 9600)", "WARNING");
+                Log($"{selected} не ответил как манипулятор", "WARNING");
             }
         }
 
@@ -626,7 +642,7 @@ namespace CBTM
             }
 
             MessageBox.Show(
-                "Не удалось найти донгл. Подключите Arduino Leonardo и попробуйте снова.",
+                "Не удалось найти донгл. Подключите манипулятор и попробуйте снова.",
                 "Донгл не найден",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
@@ -654,10 +670,6 @@ namespace CBTM
             if (M3 != null) M3.IsEnabled = enabled;
             if (M4 != null) M4.IsEnabled = enabled;
             if (M5 != null) M5.IsEnabled = enabled;
-            if (M6 != null) M6.IsEnabled = enabled;
-            if (M7 != null) M7.IsEnabled = enabled;
-            if (M8 != null) M8.IsEnabled = enabled;
-            if (M9 != null) M9.IsEnabled = enabled;
         }
 
         private static bool IsValidPasswordCombo(string? combo)
@@ -667,7 +679,7 @@ namespace CBTM
                 return false;
             }
 
-            return Regex.IsMatch(combo, "^[123]{1,16}$");
+            return Regex.IsMatch(combo, "^[0-9]{1,16}$");
         }
 
         private async Task<string?> SendCommandAndAwaitAsync(string command, Func<string, bool> matcher, int timeoutMs = AuthResponseTimeoutMs)
@@ -786,7 +798,7 @@ namespace CBTM
                 {
                     PasswordComboDialog createDialog = new PasswordComboDialog(
                         "Установка пароля",
-                        "На донгле нет пароля.\nВведите комбинацию (только цифры 1/2/3):",
+                        "На донгле нет пароля.\nВведите комбинацию (только цифры):",
                         "Установить");
 
                     if (createDialog.ShowDialog() != true)
@@ -797,7 +809,7 @@ namespace CBTM
                     string combo = createDialog.PasswordCombo;
                     if (!IsValidPasswordCombo(combo))
                     {
-                        MessageBox.Show("Неверный формат. Используйте только цифры 1, 2, 3.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        MessageBox.Show("Неверный формат. Используйте только цифры.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
                         continue;
                     }
 
@@ -823,7 +835,7 @@ namespace CBTM
             {
                 PasswordComboDialog authDialog = new PasswordComboDialog(
                     "Авторизация",
-                    "Введите пароль-комбинацию кнопок (цифры 1/2/3):",
+                    "Введите пароль-комбинацию цифры:",
                     "Войти");
 
                 if (authDialog.ShowDialog() != true)
@@ -834,7 +846,7 @@ namespace CBTM
                 string combo = authDialog.PasswordCombo;
                 if (!IsValidPasswordCombo(combo))
                 {
-                    MessageBox.Show("Неверный формат. Используйте только цифры 1, 2, 3.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show("Неверный формат. Используйте только цифры", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
                     continue;
                 }
 
@@ -874,10 +886,6 @@ namespace CBTM
             _settings.M3Value = SanitizeButtonText(M3.Text);
             _settings.M4Value = SanitizeButtonText(M4.Text);
             _settings.M5Value = SanitizeButtonText(M5.Text);
-            _settings.M6Value = SanitizeButtonText(M6.Text);
-            _settings.M7Value = SanitizeButtonText(M7.Text);
-            _settings.M8Value = SanitizeButtonText(M8.Text);
-            _settings.M9Value = SanitizeButtonText(M9.Text);
         }
 
         private void ApplySettingsToUI()
@@ -895,18 +903,28 @@ namespace CBTM
             M3.Text = _settings.M3Value;
             M4.Text = _settings.M4Value;
             M5.Text = _settings.M5Value;
-            M6.Text = _settings.M6Value;
-            M7.Text = _settings.M7Value;
-            M8.Text = _settings.M8Value;
-            M9.Text = _settings.M9Value;
+
+            // Инициализация состояния ползунка скорости градиента
+            if (SpeedG != null)
+            {
+                if (_settings.IsMonoColor)
+                {
+                    SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
+                    SpeedG.IsEnabled = false;
+                }
+                else
+                {
+                    SpeedG.Background = System.Windows.Media.Brushes.White;
+                    SpeedG.IsEnabled = true;
+                }
+            }
         }
 
         private string BuildSettingsPayload()
         {
             string buttonPayload = string.Join("|", new[]
             {
-                _settings.M1Value, _settings.M2Value, _settings.M3Value, _settings.M4Value, _settings.M5Value,
-                _settings.M6Value, _settings.M7Value, _settings.M8Value, _settings.M9Value
+                _settings.M1Value, _settings.M2Value, _settings.M3Value, _settings.M4Value, _settings.M5Value
             });
 
             return string.Join(",", new[]
@@ -962,10 +980,6 @@ namespace CBTM
             if (buttons.Length > 2) parsed.M3Value = buttons[2];
             if (buttons.Length > 3) parsed.M4Value = buttons[3];
             if (buttons.Length > 4) parsed.M5Value = buttons[4];
-            if (buttons.Length > 5) parsed.M6Value = buttons[5];
-            if (buttons.Length > 6) parsed.M7Value = buttons[6];
-            if (buttons.Length > 7) parsed.M8Value = buttons[7];
-            if (buttons.Length > 8) parsed.M9Value = buttons[8];
 
             return true;
         }
@@ -1050,8 +1064,55 @@ namespace CBTM
             SendCommand("GET_SETTINGS");
         }
 
+        private void UpdatePasswordChangeButtonState()
+        {
+            bool isLocked = _verificationLockUntil.HasValue && DateTime.Now < _verificationLockUntil.Value;
+
+            if (ChangePasswordButton != null)
+            {
+                ChangePasswordButton.IsEnabled = !isLocked;
+
+                if (isLocked)
+                {
+                    ChangePasswordButton.Background = System.Windows.Media.Brushes.DarkGray;
+                    ChangePasswordButton.Foreground = System.Windows.Media.Brushes.Black;
+                    ChangePasswordButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
+                    ChangePasswordButton.BorderThickness = new Thickness(1);
+
+                    int remainingSeconds = (int)(_verificationLockUntil.Value - DateTime.Now).TotalSeconds;
+                    ChangePasswordButton.Content = $"Заблокировано ({remainingSeconds}с)";
+                }
+                else
+                {
+                    ChangePasswordButton.Background = System.Windows.Media.Brushes.White;
+                    ChangePasswordButton.Foreground = System.Windows.Media.Brushes.Black;
+                    ChangePasswordButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
+                    ChangePasswordButton.BorderThickness = new Thickness(1);
+
+                    ChangePasswordButton.Content = "Сменить пароль";
+                }
+            }
+        }
+
         private async void ChangePasswordButton_Click(object sender, RoutedEventArgs e)
         {
+            if (_verificationLockUntil.HasValue && DateTime.Now < _verificationLockUntil.Value)
+            {
+                int remainingSeconds = (int)(_verificationLockUntil.Value - DateTime.Now).TotalSeconds;
+                MessageBox.Show(
+                    $"Функция смены пароля заблокирована.\nПовторите попытку через {remainingSeconds} сек.",
+                    "Заблокировано",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
+            if (_verificationLockUntil.HasValue && DateTime.Now >= _verificationLockUntil.Value)
+            {
+                _verificationLockUntil = null;
+                _failedVerificationAttempts = 0;
+            }
+
             if (!await EnsureDongleConnectionAsync())
             {
                 return;
@@ -1064,9 +1125,62 @@ namespace CBTM
 
             while (_isConnected)
             {
+                PasswordComboDialog verifyDialog = new PasswordComboDialog(
+                    "Подтверждение пароля",
+                    $"Введите текущий пароль для подтверждения:\n" +
+                    $"Попыток осталось: {MaxPasswordChangeAttempts - _failedVerificationAttempts}",
+                    "Подтвердить");
+
+                if (verifyDialog.ShowDialog() != true)
+                {
+                    return;
+                }
+
+                string currentPassword = verifyDialog.PasswordCombo;
+                if (!IsValidPasswordCombo(currentPassword))
+                {
+                    MessageBox.Show("Неверный формат пароля.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    continue;
+                }
+
+                string? verifyResp = await SendCommandAndAwaitAsync(
+                    $"AUTH:{currentPassword}",
+                    s => s == "AUTH_OK" || s == "AUTH_FAILED" || s.StartsWith("ERROR", StringComparison.Ordinal));
+
+                if (verifyResp == "AUTH_OK")
+                {
+                    _failedVerificationAttempts = 0;
+                    break;
+                }
+
+                _failedVerificationAttempts++;
+
+                if (_failedVerificationAttempts >= MaxPasswordChangeAttempts)
+                {
+                    _verificationLockUntil = DateTime.Now.AddMinutes(PasswordChangeLockMinutes);
+                    UpdatePasswordChangeButtonState();
+                    MessageBox.Show(
+                        $"Превышено количество попыток ввода пароля ({MaxPasswordChangeAttempts}).\n" +
+                        $"Функция смены пароля заблокирована на {PasswordChangeLockMinutes} минуту.",
+                        "Блокировка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    return;
+                }
+
+                MessageBox.Show(
+                    $"Неверный пароль.\n" +
+                    $"Попыток осталось: {MaxPasswordChangeAttempts - _failedVerificationAttempts}",
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+
+            while (_isConnected)
+            {
                 PasswordComboDialog dialog = new PasswordComboDialog(
                     "Смена пароля",
-                    "Введите новую комбинацию (только цифры 1/2/3):",
+                    "Введите новую комбинацию (только цифры):",
                     "Сохранить");
 
                 if (dialog.ShowDialog() != true)
@@ -1077,7 +1191,7 @@ namespace CBTM
                 string combo = dialog.PasswordCombo;
                 if (!IsValidPasswordCombo(combo))
                 {
-                    MessageBox.Show("Неверный формат. Используйте только цифры 1, 2, 3.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show("Неверный формат. Используйте только цифры.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
                     continue;
                 }
 
@@ -1095,29 +1209,181 @@ namespace CBTM
             }
         }
 
+        private void ChangePasswordButton_MouseEnter(object sender, MouseEventArgs e)
+        {
+            if (ChangePasswordButton.IsEnabled)
+            {
+                ChangePasswordButton.BorderBrush = System.Windows.Media.Brushes.Blue;
+                ChangePasswordButton.BorderThickness = new Thickness(2);
+            }
+        }
+
+        private void ChangePasswordButton_MouseLeave(object sender, MouseEventArgs e)
+        {
+            ChangePasswordButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
+            ChangePasswordButton.BorderThickness = new Thickness(1);
+        }
+
+        // === Обработчики переключения режимов подсветки ===
+        private void MonoColor_Checked(object sender, RoutedEventArgs e)
+        {
+            if (SpeedG != null)
+            {
+                SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
+                SpeedG.IsEnabled = false;
+            }
+        }
+
+        private void MonoColor_Unchecked(object sender, RoutedEventArgs e)
+        {
+            if (SpeedG != null)
+            {
+                SpeedG.Background = System.Windows.Media.Brushes.White;
+                SpeedG.IsEnabled = true;
+            }
+        }
+
+        private void Gradient_Checked(object sender, RoutedEventArgs e)
+        {
+            if (SpeedG != null)
+            {
+                SpeedG.Background = System.Windows.Media.Brushes.White;
+                SpeedG.IsEnabled = true;
+            }
+        }
+
+        private void Gradient_Unchecked(object sender, RoutedEventArgs e)
+        {
+            if (SpeedG != null)
+            {
+                SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
+                SpeedG.IsEnabled = false;
+            }
+        }
+        // =================================================
+
         private void HelpButton_Click(object sender, RoutedEventArgs e)
         {
-            const string helpText =
-                "Справка по функциям программы\n\n" +
-                "1) Подключение\n" +
-                "- Программа автоматически ищет и подключает донгл Arduino Leonardo.\n" +
-                "- В выпадающем списке COM можно выбрать порт вручную.\n\n" +
-                "2) Безопасность\n" +
-                "- После подключения выполняется проверка пароля (комбинация 1/2/3).\n" +
-                "- Пока пароль не введен правильно, настройки и команды заблокированы.\n\n" +
-                "3) Курсор\n" +
-                "- Инверсия X/Y и чувствительность сенсора.\n\n" +
-                "4) Подсветка\n" +
-                "- Яркость, режим Градиент/Моноцвет, цвет RGB (формат 000.000.000), скорость градиента.\n\n" +
-                "5) Клавиши\n" +
-                "- Настройка биндов M1-M9 и кнопка смены пароля.\n\n" +
-                "6) Кнопки внизу\n" +
-                "- Сохранить: отправляет текущие настройки на донгл.\n" +
-                "- Сбросить: запрашивает настройки с донгла.\n\n" +
-                "7) Лог активности\n" +
-                "- Показывает обмен с донглом: TX (отправка), RX (прием), ошибки и статус.";
+            Window helpWindow = new Window
+            {
+                Title = "Справка о функциях",
+                Width = 520,
+                Height = 650,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this
+            };
 
-            MessageBox.Show(helpText, "Справка о функциях", MessageBoxButton.OK, MessageBoxImage.Information);
+            Grid mainGrid = new Grid();
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            ScrollViewer scrollViewer = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Margin = new Thickness(15)
+            };
+
+            StackPanel contentStack = new StackPanel();
+
+            TextBlock textBlock = new TextBlock
+            {
+                Text = "Справка по функциям программы\n\n" +
+                       "1) Подключение\n" +
+                       "- Программа автоматически ищет и подключает донгл манипулятора\n" +
+                       "- В выпадающем списке COM-портов можно выбрать порт вручную\n" +
+                       "- При отключении донгла программа попытается переподключиться\n\n" +
+                       "2) Безопасность\n" +
+                       "- После подключения требуется ввод пароля-комбинации (цифры 0-9)\n" +
+                       "- Пока пароль не введён, все настройки и команды заблокированы\n" +
+                       "- Пароль можно изменить через кнопку \"Сменить пароль\"\n\n" +
+                       "3) Курсор\n" +
+                       "- Инверсия X/Y - отразить движение курсора по горизонтали/вертикали\n" +
+                       "- Чувствительность - скорость реакции сенсора (1-10)\n\n" +
+                       "4) Подсветка\n" +
+                       "- Яркость - интенсивность подсветки (0-100%)\n" +
+                       "- Режим: Градиент (плавная смена цветов) или Моноцвет\n" +
+                       "- Цвет RGB - формат 000.000.000 (красный.зелёный.синий)\n" +
+                       "- Скорость градиента - быстрота смены цветов (0-100)\n\n" +
+                       "5) Клавиши\n" +
+                       "- Настройка биндов для кнопок M1-M5\n" +
+                       "- Доступные действия: клики мыши, клавиши клавиатуры,\n" +
+                       "  мультимедийные команды (left click — левый клик (левая кнопка мыши),\n  " +
+                       " right click — правый клик (правая кнопка мыши),\n  " +
+                       "middle click — средний клик (колесико мыши),\n  " +
+                       "back — назад, forward — вперёд, Volume Up — увеличить громкость,\n  " +
+                       " Volume Down — уменьшить громкость,\n  " +
+                       "Mute — отключить звук (без звука),\n  " +
+                       "Task View — представление задач (переключение задач))\n" +
+                       "- Изменение пароля вызывает окно для смены пароля, но при 3 ошибках\n" +
+                       "  приложение будет заблокировано,\n  и после таймера необходимо повторно авторизоваться через эту кнопку",
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 13,
+                Margin = new Thickness(0, 0, 0, 20)
+            };
+            contentStack.Children.Add(textBlock);
+
+            try
+            {
+                Image helpImage = new Image
+                {
+                    Stretch = Stretch.Uniform,
+                    MaxWidth = 400,
+                    MaxHeight = 300,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(10, 10, 10, 20)
+                };
+
+                helpImage.Source = new System.Windows.Media.Imaging.BitmapImage(
+                    new Uri("pack://application:,,,/Resources/help_image.png", UriKind.Absolute));
+
+                contentStack.Children.Add(helpImage);
+            }
+            catch
+            {
+                TextBlock errorText = new TextBlock
+                {
+                    Text = "[Изображение не загружено]",
+                    Foreground = System.Windows.Media.Brushes.Gray,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 0, 0, 20)
+                };
+                contentStack.Children.Add(errorText);
+            }
+
+            TextBlock textBlock2 = new TextBlock
+            {
+                Text = "6) Кнопки управления\n" +
+                       "- Сохранить - отправить текущие настройки на донгл\n" +
+                       "- Сбросить - загрузить настройки из донгла в программу\n" +
+                       "- Сменить пароль - установить новую комбинацию доступа\n\n" +
+                       "7) Лог активности\n" +
+                       "- Показывает все команды и ответы донгла\n" +
+                       "- TX - отправленные команды\n" +
+                       "- RX - полученные ответы\n" +
+                       "- ERROR - ошибки связи",
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 13,
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            contentStack.Children.Add(textBlock2);
+
+            scrollViewer.Content = contentStack;
+            Grid.SetRow(scrollViewer, 0);
+
+            Button closeButton = new Button
+            {
+                Content = "Закрыть",
+                Width = 100,
+                Margin = new Thickness(0, 10, 15, 15),
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            closeButton.Click += (_, _) => helpWindow.Close();
+            Grid.SetRow(closeButton, 1);
+
+            mainGrid.Children.Add(scrollViewer);
+            mainGrid.Children.Add(closeButton);
+            helpWindow.Content = mainGrid;
+            helpWindow.ShowDialog();
         }
 
         private void ColorInputBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
@@ -1138,6 +1404,7 @@ namespace CBTM
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
             _portRefreshTimer?.Stop();
+            _lockUpdateTimer?.Stop();
             DisconnectFromPort();
         }
 
@@ -1162,11 +1429,12 @@ namespace CBTM
 
         private void UpdateStatusBar(string message)
         {
-            Title = $"CRM - Управление мышью | {message}";
+            Title = $"CRM - Управление манипулятором | {message}";
         }
 
         #endregion
     }
+
 
     public class PasswordComboDialog : Window
     {
@@ -1201,7 +1469,7 @@ namespace CBTM
                 MaxLength = 16,
                 TextAlignment = TextAlignment.Center
             };
-            _comboBox.PreviewTextInput += (_, e) => e.Handled = !Regex.IsMatch(e.Text, "^[123]+$");
+            _comboBox.PreviewTextInput += (_, e) => e.Handled = !Regex.IsMatch(e.Text, "^[0-9]+$");
             _comboBox.KeyDown += (_, e) =>
             {
                 if (e.Key == Key.Enter)
@@ -1237,9 +1505,9 @@ namespace CBTM
         private void Submit()
         {
             string value = (_comboBox.Text ?? string.Empty).Trim();
-            if (!Regex.IsMatch(value, "^[123]{1,16}$"))
+            if (!Regex.IsMatch(value, "^[0-9]{1,16}$"))
             {
-                MessageBox.Show("Комбинация должна содержать только цифры 1, 2, 3.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show("Комбинация должна содержать только цифры.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
