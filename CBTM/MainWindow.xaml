@@ -338,10 +338,16 @@
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M4" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M4" Text="back" Width="100" HorizontalAlignment="Left"/>
+                            <Button Content="ПК…" x:Name="M4HostButton" Width="48" Height="24"
+                                    Margin="6,0,0,0" Style="{StaticResource DefaultButtonStyle}"
+                                    ToolTip="Назначить действие на ПК (запуск программы или показ текста)"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M5" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M5" Text="forward" Width="100" HorizontalAlignment="Left"/>
+                            <Button Content="ПК…" x:Name="M5HostButton" Width="48" Height="24"
+                                    Margin="6,0,0,0" Style="{StaticResource DefaultButtonStyle}"
+                                    ToolTip="Назначить действие на ПК (запуск программы или показ текста)"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5"/>
                         <StackPanel Orientation="Horizontal" Margin="0,5"/>

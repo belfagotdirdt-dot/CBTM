@@ -88,7 +88,10 @@ namespace CBTM
             Converters = { new JsonStringEnumConverter() }
         };
 
-        // Действия ПК для кнопок M1..M9 (физически работают только M1-M3).
+        // Действия ПК для кнопок M1..M5. На текущем железе нажатие приходит
+        // только с физических кнопок M1-M3 (лев./прав./средняя), поэтому
+        // действия на M4/M5 сохраняются, но сработать пока не могут.
+        private const int PhysicalButtonCount = 3;
         private readonly HostActionConfig[] _hostActions = CreateEmptyHostActions();
 
         private MouseSettings _settings = MouseSettings.CreateDefault();
@@ -145,6 +148,8 @@ namespace CBTM
             M1HostButton.Click += (_, _) => ConfigureHostAction(0, "M1");
             M2HostButton.Click += (_, _) => ConfigureHostAction(1, "M2");
             M3HostButton.Click += (_, _) => ConfigureHostAction(2, "M3");
+            M4HostButton.Click += (_, _) => ConfigureHostAction(3, "M4");
+            M5HostButton.Click += (_, _) => ConfigureHostAction(4, "M5");
 
             PortComboBox.SelectionChanged += PortComboBox_SelectionChanged;
 
@@ -1540,6 +1545,12 @@ namespace CBTM
             {
                 Log($"{buttonLabel}: назначено действие ПК ({DescribeHostAction(_hostActions[index])}). " +
                     "Нажмите «Сохранить», чтобы применить на донгле.", "INFO");
+
+                if (index >= PhysicalButtonCount)
+                {
+                    Log($"{buttonLabel}: на текущем железе нет физической кнопки — " +
+                        "действие сохранено, но сработает только после доработки мыши.", "WARNING");
+                }
             }
             else
             {
@@ -1554,6 +1565,8 @@ namespace CBTM
                 0 => M1,
                 1 => M2,
                 2 => M3,
+                3 => M4,
+                4 => M5,
                 _ => null
             };
         }
@@ -1565,6 +1578,8 @@ namespace CBTM
                 0 => "left click",
                 1 => "right click",
                 2 => "middle click",
+                3 => "back",
+                4 => "forward",
                 _ => "none"
             };
         }
@@ -1574,6 +1589,8 @@ namespace CBTM
             RefreshHostRow(0, M1, M1HostButton);
             RefreshHostRow(1, M2, M2HostButton);
             RefreshHostRow(2, M3, M3HostButton);
+            RefreshHostRow(3, M4, M4HostButton);
+            RefreshHostRow(4, M5, M5HostButton);
         }
 
         private void RefreshHostRow(int index, TextBox? bindBox, Button? hostButton)
