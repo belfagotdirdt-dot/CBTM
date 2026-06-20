@@ -9,12 +9,21 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <None Remove="img\help_image.png" />
+      <None Remove="Resources\help_image.png" />
+    </ItemGroup>
+
+    <ItemGroup>
       <PackageReference Include="System.Drawing.Common" Version="10.0.9" />
       <PackageReference Include="System.IO.Ports" Version="10.0.1" />
     </ItemGroup>
 
     <ItemGroup>
       <ClCompile Include="dongle.ino" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Resource Include="Resources\help_image.png" />
     </ItemGroup>
 
     <ItemGroup>

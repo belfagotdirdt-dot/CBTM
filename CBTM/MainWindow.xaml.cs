@@ -962,7 +962,7 @@ namespace CBTM
 
         private void ApplySettingsToUI()
         {
-            InvertXCheckbox.IsChecked = _settings.InvertX;
+            InvertXCheckbox.IsChecked = _settings.InvertX;4314ers4314ers4314ers4314ers
             InvertYCheckbox.IsChecked = _settings.InvertY;
             SensitivityTextBox.Text = _settings.Sensitivity;
             BrightnessSlider.Value = _settings.Brightness;
@@ -975,8 +975,8 @@ namespace CBTM
             M3.Text = _settings.M3Value;
             M4.Text = _settings.M4Value;
             M5.Text = _settings.M5Value;
-
-            // Инициализация состояния ползунка скорости градиента
+            
+            // Инициализация состояния ползунка скорости градиента4314ers4314ers4314ers4314ers4314ers4314ers4314ers
             if (SpeedG != null)
             {
                 if (_settings.IsMonoColor)
@@ -986,7 +986,7 @@ namespace CBTM
                 }
                 else
                 {
-                    SpeedG.Background = System.Windows.Media.Brushes.White;
+                    SpeedG.Background = System.Windows.Media.Brushes.Black;
                     SpeedG.IsEnabled = true;
                 }
             }
@@ -1327,7 +1327,7 @@ namespace CBTM
         {
             if (SpeedG != null)
             {
-                SpeedG.Background = System.Windows.Media.Brushes.White;
+                SpeedG.Background = System.Windows.Media.Brushes.Black;
                 SpeedG.IsEnabled = true;
             }
         }
@@ -1336,7 +1336,7 @@ namespace CBTM
         {
             if (SpeedG != null)
             {
-                SpeedG.Background = System.Windows.Media.Brushes.White;
+                SpeedG.Background = System.Windows.Media.Brushes.Black;
                 SpeedG.IsEnabled = true;
             }
         }
@@ -1423,7 +1423,7 @@ namespace CBTM
                 };
 
                 helpImage.Source = new System.Windows.Media.Imaging.BitmapImage(
-                    new Uri("pack://application:,,,/Resources/help_image.png", UriKind.Absolute));
+                    new Uri("D:\\213\\CBTM\\Resources\\help_image.png", UriKind.Absolute));
 
                 contentStack.Children.Add(helpImage);
             }
@@ -1432,7 +1432,7 @@ namespace CBTM
                 TextBlock errorText = new TextBlock
                 {
                     Text = "[Изображение не загружено]",
-                    Foreground = System.Windows.Media.Brushes.Gray,
+                    Foreground = System.Windows.Media.Brushes.Black,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     Margin = new Thickness(0, 0, 0, 20)
                 };
@@ -1609,17 +1609,17 @@ namespace CBTM
 
             if (isHost)
             {
-                hostButton.Content = "ПК ✓";
+                hostButton.Content = "Изменено ✓";
                 hostButton.ToolTip = DescribeHostAction(action);
             }
             else if (deviceSaysHost)
             {
-                hostButton.Content = "ПК ?";
+                hostButton.Content = "Изменено ?";
                 hostButton.ToolTip = "На донгле кнопка помечена как действие ПК, но действие не настроено на этом компьютере. Нажмите, чтобы задать.";
             }
             else
             {
-                hostButton.Content = "ПК…";
+                hostButton.Content = "Измененить";
                 hostButton.ToolTip = "Назначить действие на ПК (запуск программы или показ текста)";
             }
         }

@@ -277,8 +277,8 @@
                 <Expander Header="Подсветка" IsExpanded="True">
                     <StackPanel Height="248">
                         <Label Content="Яркость:"/>
-                        <Slider x:Name="BrightnessSlider" Minimum="0" Maximum="100" 
-                                Value="50" TickFrequency="1"/>
+                        <Slider x:Name="BrightnessSlider" Minimum="0" Maximum="100" Foreground="Black"
+                                Value="50" TickFrequency="1" Background="Black"/>
 
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <RadioButton GroupName="LightMode" Name="Gradient" 
@@ -304,7 +304,7 @@
                 </Expander>
 
                 <!-- Раздел 3: Клавиши -->
-                <Expander Header="Клавиши" IsExpanded="True" Height="396">
+                <Expander Header="Клавиши" IsExpanded="True" >
                     <StackPanel>
                         <Button Content="Изменить пароль" x:Name="ChangePasswordButton" 
                                 HorizontalAlignment="Left" 
@@ -313,47 +313,42 @@
 
                         <Label Content="Настройка биндов клавиш:" Margin="0,15,0,5"/>
 
-                        <!-- Клавиши M1-M9 -->
+                        <!-- Клавиши M1-M5 -->
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M1" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M1" Text="left click" Width="100" HorizontalAlignment="Left"/>
-                            <Button Content="ПК…" x:Name="M1HostButton" Width="48" Height="24"
+                            <Button Content="Изменить" x:Name="M1HostButton" Width="86" Height="24"
                                     Margin="6,0,0,0" Style="{StaticResource DefaultButtonStyle}"
                                     ToolTip="Назначить действие на ПК (запуск программы или показ текста)"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M2" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M2" Text="right click" Width="100" HorizontalAlignment="Left"/>
-                            <Button Content="ПК…" x:Name="M2HostButton" Width="48" Height="24"
+                            <Button Content="Изменить" x:Name="M2HostButton" Width="86" Height="24"
                                     Margin="6,0,0,0" Style="{StaticResource DefaultButtonStyle}"
                                     ToolTip="Назначить действие на ПК (запуск программы или показ текста)"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M3" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M3" Text="middle click" Width="100" HorizontalAlignment="Left"/>
-                            <Button Content="ПК…" x:Name="M3HostButton" Width="48" Height="24"
+                            <Button Content="Изменить" x:Name="M3HostButton" Width="86" Height="24"
                                     Margin="6,0,0,0" Style="{StaticResource DefaultButtonStyle}"
                                     ToolTip="Назначить действие на ПК (запуск программы или показ текста)"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M4" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M4" Text="back" Width="100" HorizontalAlignment="Left"/>
-                            <Button Content="ПК…" x:Name="M4HostButton" Width="48" Height="24"
+                            <Button Content="Изменить" x:Name="M4HostButton" Width="86" Height="24"
                                     Margin="6,0,0,0" Style="{StaticResource DefaultButtonStyle}"
                                     ToolTip="Назначить действие на ПК (запуск программы или показ текста)"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5">
                             <Label Content="M5" Width="60" HorizontalAlignment="Left"/>
                             <TextBox x:Name="M5" Text="forward" Width="100" HorizontalAlignment="Left"/>
-                            <Button Content="ПК…" x:Name="M5HostButton" Width="48" Height="24"
+                            <Button Content="Изменить" x:Name="M5HostButton" Width="86" Height="24"
                                     Margin="6,0,0,0" Style="{StaticResource DefaultButtonStyle}"
                                     ToolTip="Назначить действие на ПК (запуск программы или показ текста)"/>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,5"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,5"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,5"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,5"/>
-
                     </StackPanel>
                 </Expander>
 
