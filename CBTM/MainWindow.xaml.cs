@@ -1980,7 +1980,7 @@ namespace CBTM
         }
     }
 
-    // Окно для показа произвольного текста при нажатии кнопки.
+    // Отдельное оформленное окно для показа произвольного текста при нажатии кнопки.
     public class TextDisplayWindow : Window
     {
         public TextDisplayWindow(string buttonLabel, string text)
@@ -1988,9 +1988,39 @@ namespace CBTM
             Title = $"Текст — {buttonLabel}";
             Width = 520;
             Height = 360;
+            MinWidth = 320;
+            MinHeight = 220;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            Background = new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E));
 
-            Content = new TextBox
+            Grid root = new Grid { Margin = new Thickness(16) };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            TextBlock header = new TextBlock
+            {
+                Text = $"Кнопка {buttonLabel}",
+                Foreground = Brushes.Gray,
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(2, 0, 0, 8)
+            };
+            Grid.SetRow(header, 0);
+
+            // Текст в рамке-«карточке». TextBox только ради прокрутки и копирования,
+            // но оформлен под окно программы, а не под страницу блокнота.
+            Border card = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x2D)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x3E, 0x3E, 0x3E)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(12)
+            };
+            Grid.SetRow(card, 1);
+
+            card.Child = new TextBox
             {
                 Text = text ?? string.Empty,
                 IsReadOnly = true,
@@ -1998,9 +2028,29 @@ namespace CBTM
                 TextWrapping = TextWrapping.Wrap,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 FontSize = 16,
-                Margin = new Thickness(12),
-                BorderThickness = new Thickness(0)
+                Background = Brushes.Transparent,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xD4, 0xD4, 0xD4)),
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Arrow
             };
+
+            Button closeButton = new Button
+            {
+                Content = "Закрыть",
+                Width = 110,
+                Height = 30,
+                Margin = new Thickness(0, 12, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                IsCancel = true
+            };
+            closeButton.Click += (_, _) => Close();
+            Grid.SetRow(closeButton, 2);
+
+            root.Children.Add(header);
+            root.Children.Add(card);
+            root.Children.Add(closeButton);
+
+            Content = root;
         }
     }
 }
