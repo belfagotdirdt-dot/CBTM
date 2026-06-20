@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Ports;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -1670,9 +1671,8 @@ namespace CBTM
                         break;
 
                     case HostActionType.Text:
-                        TextDisplayWindow textWindow = new TextDisplayWindow($"M{oneBasedIndex}", action.Payload) { Owner = this };
-                        textWindow.Show();
-                        Log($"M{oneBasedIndex}: показан текст", "SUCCESS");
+                        TypeTextAtCursor(action.Payload);
+                        Log($"M{oneBasedIndex}: текст вставлен в активное окно", "SUCCESS");
                         break;
                 }
             }
@@ -1728,6 +1728,128 @@ namespace CBTM
             {
                 Log($"Не удалось сохранить действия ПК: {ex.Message}", "WARNING");
             }
+        }
+
+        #endregion
+
+        #region Text typing (SendInput)
+
+        // Печатает текст в окно/поле, у которого сейчас фокус ввода (где стоит курсор),
+        // эмулируя Unicode-нажатия клавиш через WinAPI SendInput.
+        private static void TypeTextAtCursor(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return;
+            }
+
+            var inputs = new List<INPUT>(text.Length * 2);
+
+            foreach (char c in text)
+            {
+                if (c == '\r')
+                {
+                    // Перевод строки печатаем как Enter ниже (по '\n'); одиночный '\r' пропускаем.
+                    continue;
+                }
+
+                if (c == '\n')
+                {
+                    inputs.Add(MakeKeyboardInput('\0', VK_RETURN, keyUp: false, unicode: false));
+                    inputs.Add(MakeKeyboardInput('\0', VK_RETURN, keyUp: true, unicode: false));
+                    continue;
+                }
+
+                // Обычный символ (в т.ч. часть суррогатной пары) — как Unicode-нажатие.
+                inputs.Add(MakeKeyboardInput(c, 0, keyUp: false, unicode: true));
+                inputs.Add(MakeKeyboardInput(c, 0, keyUp: true, unicode: true));
+            }
+
+            if (inputs.Count == 0)
+            {
+                return;
+            }
+
+            uint sent = SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT>());
+            if (sent != inputs.Count)
+            {
+                throw new InvalidOperationException($"SendInput отправил {sent} из {inputs.Count} событий (код {Marshal.GetLastWin32Error()}).");
+            }
+        }
+
+        private static INPUT MakeKeyboardInput(char unicodeChar, ushort virtualKey, bool keyUp, bool unicode)
+        {
+            uint flags = 0;
+            if (unicode) flags |= KEYEVENTF_UNICODE;
+            if (keyUp) flags |= KEYEVENTF_KEYUP;
+
+            return new INPUT
+            {
+                type = INPUT_KEYBOARD,
+                u = new InputUnion
+                {
+                    ki = new KEYBDINPUT
+                    {
+                        wVk = unicode ? (ushort)0 : virtualKey,
+                        wScan = unicode ? unicodeChar : (ushort)0,
+                        dwFlags = flags,
+                        time = 0,
+                        dwExtraInfo = IntPtr.Zero
+                    }
+                }
+            };
+        }
+
+        private const uint INPUT_KEYBOARD = 1;
+        private const uint KEYEVENTF_KEYUP = 0x0002;
+        private const uint KEYEVENTF_UNICODE = 0x0004;
+        private const ushort VK_RETURN = 0x0D;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct INPUT
+        {
+            public uint type;
+            public InputUnion u;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct InputUnion
+        {
+            [FieldOffset(0)] public MOUSEINPUT mi;
+            [FieldOffset(0)] public KEYBDINPUT ki;
+            [FieldOffset(0)] public HARDWAREINPUT hi;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MOUSEINPUT
+        {
+            public int dx;
+            public int dy;
+            public uint mouseData;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KEYBDINPUT
+        {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct HARDWAREINPUT
+        {
+            public uint uMsg;
+            public ushort wParamL;
+            public ushort wParamH;
         }
 
         #endregion
@@ -1871,7 +1993,7 @@ namespace CBTM
             _typeBox = new ComboBox { Width = 220 };
             _typeBox.Items.Add("Нет действия");
             _typeBox.Items.Add("Запуск программы / файла");
-            _typeBox.Items.Add("Показ текста в окне");
+            _typeBox.Items.Add("Печать текста (где курсор)");
             _typeBox.Items.Add("Открытие сайта (URL)");
             _typeBox.SelectedIndex = (int)current.Type;
             _typeBox.SelectionChanged += (_, _) => UpdateState();
@@ -1940,7 +2062,7 @@ namespace CBTM
             _hint.Text = type switch
             {
                 HostActionType.Program => "Укажите путь к программе или файлу. Нажмите «Обзор…», чтобы выбрать.",
-                HostActionType.Text => "Введите текст — он откроется в отдельном окне при нажатии кнопки.",
+                HostActionType.Text => "Введите текст — он будет напечатан туда, где стоит курсор ввода, при нажатии кнопки.",
                 HostActionType.Url => "Введите адрес сайта, например https://example.com",
                 _ => "Действие ПК для этой кнопки отключено (кнопка работает как обычный бинд)."
             };
@@ -1977,80 +2099,6 @@ namespace CBTM
                 Payload = type == HostActionType.None ? string.Empty : payload
             };
             DialogResult = true;
-        }
-    }
-
-    // Отдельное оформленное окно для показа произвольного текста при нажатии кнопки.
-    public class TextDisplayWindow : Window
-    {
-        public TextDisplayWindow(string buttonLabel, string text)
-        {
-            Title = $"Текст — {buttonLabel}";
-            Width = 520;
-            Height = 360;
-            MinWidth = 320;
-            MinHeight = 220;
-            WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            Background = new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E));
-
-            Grid root = new Grid { Margin = new Thickness(16) };
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-            TextBlock header = new TextBlock
-            {
-                Text = $"Кнопка {buttonLabel}",
-                Foreground = Brushes.Gray,
-                FontSize = 13,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(2, 0, 0, 8)
-            };
-            Grid.SetRow(header, 0);
-
-            // Текст в рамке-«карточке». TextBox только ради прокрутки и копирования,
-            // но оформлен под окно программы, а не под страницу блокнота.
-            Border card = new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x2D)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x3E, 0x3E, 0x3E)),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(12)
-            };
-            Grid.SetRow(card, 1);
-
-            card.Child = new TextBox
-            {
-                Text = text ?? string.Empty,
-                IsReadOnly = true,
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                FontSize = 16,
-                Background = Brushes.Transparent,
-                Foreground = new SolidColorBrush(Color.FromRgb(0xD4, 0xD4, 0xD4)),
-                BorderThickness = new Thickness(0),
-                Cursor = Cursors.Arrow
-            };
-
-            Button closeButton = new Button
-            {
-                Content = "Закрыть",
-                Width = 110,
-                Height = 30,
-                Margin = new Thickness(0, 12, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                IsCancel = true
-            };
-            closeButton.Click += (_, _) => Close();
-            Grid.SetRow(closeButton, 2);
-
-            root.Children.Add(header);
-            root.Children.Add(card);
-            root.Children.Add(closeButton);
-
-            Content = root;
         }
     }
 }
