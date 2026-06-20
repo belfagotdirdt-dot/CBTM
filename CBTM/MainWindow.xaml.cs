@@ -88,10 +88,9 @@ namespace CBTM
             Converters = { new JsonStringEnumConverter() }
         };
 
-        // Действия ПК для кнопок M1..M5. На текущем железе нажатие приходит
-        // только с физических кнопок M1-M3 (лев./прав./средняя), поэтому
-        // действия на M4/M5 сохраняются, но сработать пока не могут.
-        private const int PhysicalButtonCount = 3;
+        // Действия ПК для кнопок M1..M5. После доработки прошивки физические
+        // нажатия приходят со всех пяти кнопок (M4=D5, M5=A4 на плате мыши).
+        private const int PhysicalButtonCount = 5;
         private readonly HostActionConfig[] _hostActions = CreateEmptyHostActions();
 
         private MouseSettings _settings = MouseSettings.CreateDefault();

@@ -45,6 +45,8 @@ const byte address[6] = "00001";
 constexpr uint8_t BTN_RIGHT_MASK = (1 << 6);
 constexpr uint8_t BTN_MIDDLE_MASK = (1 << 4);
 constexpr uint8_t BTN_LEFT_MASK = (1 << 2);
+constexpr uint8_t BTN_M4_MASK = (1 << 0);
+constexpr uint8_t BTN_M5_MASK = (1 << 1);
 constexpr uint8_t LED_SETTINGS_MAGIC = 0xC7;
 constexpr uint8_t LED_SETTINGS_VERSION = 1;
 constexpr uint32_t RX_TIMEOUT_MS = 120;
@@ -82,6 +84,8 @@ enum MouseAction : uint8_t {
 MouseAction g_buttonMapLeft = ACTION_LEFT;
 MouseAction g_buttonMapRight = ACTION_RIGHT;
 MouseAction g_buttonMapMiddle = ACTION_MIDDLE;
+MouseAction g_buttonMapM4 = ACTION_NONE;
+MouseAction g_buttonMapM5 = ACTION_NONE;
 
 uint8_t prevMappedButtons = 0;
 uint8_t prevHostPhysical = 0;
@@ -130,6 +134,8 @@ void rebuildButtonMap() {
   g_buttonMapLeft = parseMouseAction(g_settings.buttons[0], ACTION_LEFT);
   g_buttonMapRight = parseMouseAction(g_settings.buttons[1], ACTION_RIGHT);
   g_buttonMapMiddle = parseMouseAction(g_settings.buttons[2], ACTION_MIDDLE);
+  g_buttonMapM4 = parseMouseAction(g_settings.buttons[3], ACTION_NONE);
+  g_buttonMapM5 = parseMouseAction(g_settings.buttons[4], ACTION_NONE);
 }
 
 uint8_t calcPersistChecksum(const PersistedState &state) {
@@ -210,6 +216,12 @@ uint8_t mapPhysicalButtonsToMouse(const uint8_t physicalButtons) {
   if ((physicalButtons & BTN_MIDDLE_MASK) != 0) {
     mapped |= actionToMappedMask(g_buttonMapMiddle);
   }
+  if ((physicalButtons & BTN_M4_MASK) != 0) {
+    mapped |= actionToMappedMask(g_buttonMapM4);
+  }
+  if ((physicalButtons & BTN_M5_MASK) != 0) {
+    mapped |= actionToMappedMask(g_buttonMapM5);
+  }
 
   return mapped;
 }
@@ -233,7 +245,10 @@ void emitHostButtonEvents(const uint8_t physical) {
   checkHostButtonEdge(physical, BTN_LEFT_MASK, g_buttonMapLeft, 1);
   checkHostButtonEdge(physical, BTN_RIGHT_MASK, g_buttonMapRight, 2);
   checkHostButtonEdge(physical, BTN_MIDDLE_MASK, g_buttonMapMiddle, 3);
-  prevHostPhysical = physical & (BTN_LEFT_MASK | BTN_RIGHT_MASK | BTN_MIDDLE_MASK);
+  checkHostButtonEdge(physical, BTN_M4_MASK, g_buttonMapM4, 4);
+  checkHostButtonEdge(physical, BTN_M5_MASK, g_buttonMapM5, 5);
+  prevHostPhysical = physical &
+      (BTN_LEFT_MASK | BTN_RIGHT_MASK | BTN_MIDDLE_MASK | BTN_M4_MASK | BTN_M5_MASK);
 }
 
 uint8_t calcLedSettingsChecksum(const SettingRGBLedMouse &p) {

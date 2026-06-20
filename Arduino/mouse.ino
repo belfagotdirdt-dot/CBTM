@@ -34,6 +34,8 @@ constexpr uint8_t PIN_JOY_SW = 4;
 constexpr uint8_t PIN_RIGHT  = 7;
 constexpr uint8_t PIN_MIDDLE = 8;
 constexpr uint8_t PIN_LEFT   = 6;
+constexpr uint8_t PIN_M4     = 5;    // доп. кнопка M4 (свободный цифровой пин)
+constexpr uint8_t PIN_M5     = A4;   // доп. кнопка M5 (A4 как цифровой; A6/A7 не подходят)
 constexpr uint8_t PIN_LED_R  = A2;
 constexpr uint8_t PIN_LED_G  = A3;
 constexpr uint8_t PIN_LED_B  = A5;
@@ -58,6 +60,8 @@ struct PersistedLedSettings {
 constexpr uint8_t BTN_RIGHT_MASK  = (1 << 6);
 constexpr uint8_t BTN_MIDDLE_MASK = (1 << 4);
 constexpr uint8_t BTN_LEFT_MASK   = (1 << 2);
+constexpr uint8_t BTN_M4_MASK     = (1 << 0);  // свободный бит пакета
+constexpr uint8_t BTN_M5_MASK     = (1 << 1);  // свободный бит пакета
 
 volatile uint8_t encoderPrevState = 0;
 volatile int8_t encoderAccumulator = 0;
@@ -427,6 +431,15 @@ uint8_t test()
     {
         buttons |= BTN_LEFT_MASK;
     }
+    // M4/M5 активны при LOW (INPUT_PULLUP): нажатие замыкает пин на GND.
+    if (digitalRead(PIN_M4) == LOW)
+    {
+        buttons |= BTN_M4_MASK;
+    }
+    if (digitalRead(PIN_M5) == LOW)
+    {
+        buttons |= BTN_M5_MASK;
+    }
     return buttons;
 }
 
@@ -436,6 +449,9 @@ void setup() {
     pinMode(PIN_RIGHT, INPUT);
     pinMode(PIN_MIDDLE, INPUT);
     pinMode(PIN_LEFT, INPUT);
+    // M4/M5 — с внутренней подтяжкой (как у кнопки джойстика): кнопка между пином и GND.
+    pinMode(PIN_M4, INPUT_PULLUP);
+    pinMode(PIN_M5, INPUT_PULLUP);
     pinMode(PIN_JOY_SW, INPUT_PULLUP);
     pinMode(PIN_ENC_A, INPUT_PULLUP);
     pinMode(PIN_ENC_B, INPUT_PULLUP);
