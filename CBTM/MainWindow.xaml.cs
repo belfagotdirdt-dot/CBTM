@@ -962,7 +962,7 @@ namespace CBTM
 
         private void ApplySettingsToUI()
         {
-            InvertXCheckbox.IsChecked = _settings.InvertX;4314ers4314ers4314ers4314ers
+            InvertXCheckbox.IsChecked = _settings.InvertX;
             InvertYCheckbox.IsChecked = _settings.InvertY;
             SensitivityTextBox.Text = _settings.Sensitivity;
             BrightnessSlider.Value = _settings.Brightness;
