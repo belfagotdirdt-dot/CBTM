@@ -23,7 +23,9 @@
     </ItemGroup>
 
     <ItemGroup>
-      <Resource Include="Resources\help_image.png" />
+      <Resource Include="Resources\help_image.png">
+        <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      </Resource>
     </ItemGroup>
 
     <ItemGroup>

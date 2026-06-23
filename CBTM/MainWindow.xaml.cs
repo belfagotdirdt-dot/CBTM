@@ -103,6 +103,7 @@ namespace CBTM
         private bool _isUpdatingPortCombo;
 
         private bool _isAuthenticated;
+        private readonly Dictionary<string, string> _cachedPasswords = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private Task<bool>? _authFlowTask;
         private readonly object _awaitResponseLock = new();
         private TaskCompletionSource<string>? _awaitResponseTcs;
@@ -857,6 +858,28 @@ namespace CBTM
                 return false;
             }
 
+
+            if(state == "AUTH_REQUIRED" && _cachedPasswords.TryGetValue(_settings.SelectedPortName, out var cachedCombo))
+            {
+                UpdateStatusBar("Попытка автоматической авторизации...");
+                string? cachedResp = await SendCommandAndAwaitAsync(
+                    $"AUTH:{cachedCombo}",
+                    s => s == "AUTH_OK" || s == "AUTH_FAILED" || s.StartsWith("ERROR", StringComparison.Ordinal));
+
+                if (cachedResp == "AUTH_OK")
+                {
+                    UpdateAuthUiState(true);
+                    _ = RequestSettingsFromDeviceAsync();
+                    return true; // Успешно разблокировали без диалога
+                }
+                else
+                {
+                    // Пароль не подошел (сменился или это другой донгл), удаляем из кэша
+                    _cachedPasswords.Remove(_settings.SelectedPortName);
+                }
+            }
+
+
             if (state == "NO_PASSWORD")
             {
                 while (_isConnected)
@@ -884,6 +907,7 @@ namespace CBTM
 
                     if (resp == "PASSWORD_CHANGED")
                     {
+                        _cachedPasswords[_settings.SelectedPortName] = combo;
                         UpdateAuthUiState(true);
                         _ = RequestSettingsFromDeviceAsync();
                         MessageBox.Show("Пароль установлен.", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -921,6 +945,7 @@ namespace CBTM
 
                 if (authResp == "AUTH_OK")
                 {
+                    _cachedPasswords[_settings.SelectedPortName] = combo;
                     UpdateAuthUiState(true);
                     _ = RequestSettingsFromDeviceAsync();
                     return true;
@@ -938,7 +963,7 @@ namespace CBTM
 
         private void CollectSettingsFromUI()
         {
-            _settings.InvertX = InvertXCheckbox.IsChecked ?? false;
+            _settings.InvertX = !(InvertXCheckbox.IsChecked ?? false);
             _settings.InvertY = InvertYCheckbox.IsChecked ?? false;
             _settings.Sensitivity = string.IsNullOrWhiteSpace(SensitivityTextBox.Text) ? "1" : SensitivityTextBox.Text.Trim();
             _settings.Brightness = BrightnessSlider.Value;
@@ -967,7 +992,7 @@ namespace CBTM
 
         private void ApplySettingsToUI()
         {
-            InvertXCheckbox.IsChecked = _settings.InvertX;
+            InvertXCheckbox.IsChecked = !_settings.InvertX;
             InvertYCheckbox.IsChecked = _settings.InvertY;
             SensitivityTextBox.Text = _settings.Sensitivity;
             BrightnessSlider.Value = _settings.Brightness;
@@ -1282,6 +1307,7 @@ namespace CBTM
 
                 if (resp == "PASSWORD_CHANGED")
                 {
+                    _cachedPasswords[_settings.SelectedPortName] = combo;
                     MessageBox.Show("Пароль успешно изменен.", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
