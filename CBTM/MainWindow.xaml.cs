@@ -697,6 +697,11 @@ namespace CBTM
             _isAuthenticated = authenticated;
             bool enabled = authenticated;
 
+            // Блокируем/разблокируем сами Expander'ы
+            if (CursorExpander != null) CursorExpander.IsEnabled = enabled;
+            if (LightingExpander != null) LightingExpander.IsEnabled = enabled;
+            if (ButtonsExpander != null) ButtonsExpander.IsEnabled = enabled;
+
             if (SaveButton != null) SaveButton.IsEnabled = enabled;
             if (ResetButton != null) ResetButton.IsEnabled = enabled;
 
@@ -975,18 +980,18 @@ namespace CBTM
             M3.Text = _settings.M3Value;
             M4.Text = _settings.M4Value;
             M5.Text = _settings.M5Value;
-            
-            // Инициализация состояния ползунка скорости градиента4314ers4314ers4314ers4314ers4314ers4314ers4314ers
+
+            // Инициализация состояния ползунка скорости градиента
             if (SpeedG != null)
             {
                 if (_settings.IsMonoColor)
                 {
-                    SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
+                    //SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
                     SpeedG.IsEnabled = false;
                 }
                 else
                 {
-                    SpeedG.Background = System.Windows.Media.Brushes.Black;
+                    //SpeedG.Background = System.Windows.Media.Brushes.Black;
                     SpeedG.IsEnabled = true;
                 }
             }
@@ -1144,32 +1149,19 @@ namespace CBTM
                 return;
             }
 
-            // Паттерн `is DateTime lockUntil` напрямую охраняет блок —
-            // внутри lockUntil гарантированно не null (нет предупреждения CS8629).
             if (_verificationLockUntil is DateTime lockUntil && DateTime.Now < lockUntil)
             {
                 ChangePasswordButton.IsEnabled = false;
-                ChangePasswordButton.Background = System.Windows.Media.Brushes.DarkGray;
-                ChangePasswordButton.Foreground = System.Windows.Media.Brushes.Black;
-                ChangePasswordButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
-                ChangePasswordButton.BorderThickness = new Thickness(1);
-
                 int remainingSeconds = (int)(lockUntil - DateTime.Now).TotalSeconds;
                 ChangePasswordButton.Content = $"Заблокировано ({remainingSeconds}с)";
             }
             else
             {
                 ChangePasswordButton.IsEnabled = true;
-                ChangePasswordButton.Background = System.Windows.Media.Brushes.White;
-                ChangePasswordButton.Foreground = System.Windows.Media.Brushes.Black;
                 ChangePasswordButton.Content = "Сменить пароль";
-
-                // Блокировка снята — таймер больше не нужен. Рамку не трогаем,
-                // ею управляют обработчики наведения (hover).
                 _lockUpdateTimer?.Stop();
             }
         }
-
         private async void ChangePasswordButton_Click(object sender, RoutedEventArgs e)
         {
             if (_verificationLockUntil.HasValue && DateTime.Now < _verificationLockUntil.Value)
@@ -1313,12 +1305,12 @@ namespace CBTM
             ChangePasswordButton.BorderThickness = new Thickness(1);
         }
 
-        // === Обработчики переключения режимов подсветки ===
+        //=== Обработчики переключения режимов подсветки ===
         private void MonoColor_Checked(object sender, RoutedEventArgs e)
         {
             if (SpeedG != null)
             {
-                SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
+                //SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
                 SpeedG.IsEnabled = false;
             }
         }
@@ -1327,7 +1319,7 @@ namespace CBTM
         {
             if (SpeedG != null)
             {
-                SpeedG.Background = System.Windows.Media.Brushes.Black;
+                //SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
                 SpeedG.IsEnabled = true;
             }
         }
@@ -1336,7 +1328,7 @@ namespace CBTM
         {
             if (SpeedG != null)
             {
-                SpeedG.Background = System.Windows.Media.Brushes.Black;
+                //SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
                 SpeedG.IsEnabled = true;
             }
         }
@@ -1345,7 +1337,7 @@ namespace CBTM
         {
             if (SpeedG != null)
             {
-                SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
+                //SpeedG.Background = System.Windows.Media.Brushes.DarkGray;
                 SpeedG.IsEnabled = false;
             }
         }
@@ -1423,7 +1415,7 @@ namespace CBTM
                 };
 
                 helpImage.Source = new System.Windows.Media.Imaging.BitmapImage(
-                    new Uri("D:\\213\\CBTM\\Resources\\help_image.png", UriKind.Absolute));
+                    new Uri("pack://application:,,,/Resources/help_image.png", UriKind.Absolute));
 
                 contentStack.Children.Add(helpImage);
             }
@@ -1432,7 +1424,7 @@ namespace CBTM
                 TextBlock errorText = new TextBlock
                 {
                     Text = "[Изображение не загружено]",
-                    Foreground = System.Windows.Media.Brushes.Black,
+                    Foreground = System.Windows.Media.Brushes.Gray,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     Margin = new Thickness(0, 0, 0, 20)
                 };
@@ -1615,7 +1607,7 @@ namespace CBTM
             else if (deviceSaysHost)
             {
                 hostButton.Content = "Изменено ?";
-                hostButton.ToolTip = "На донгле кнопка помечена как действие ПК, но действие не настроено на этом компьютере. Нажмите, чтобы задать.";
+                hostButton.ToolTip = "На донгле кнопка помечена как действие пользовательское, но действие не настроено на этом компьютере. Нажмите, чтобы задать.";
             }
             else
             {
